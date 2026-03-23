@@ -5,141 +5,123 @@ struct TreasureMemoryCard: View {
     let item: TreasureTimelineItem
 
     var body: some View {
-        TreasureMemoryCardBody(
-            item: item,
-            background: AppTheme.Colors.cardBackground,
-            accent: nil
-        )
-    }
-}
+        VStack(spacing: 0) {
+            if !loadedImages.isEmpty {
+                MemoryMediaView(images: loadedImages)
+            }
 
-struct TreasureMilestoneCard: View {
-    let item: TreasureTimelineItem
-
-    var body: some View {
-        TreasureMemoryCardBody(
-            item: item,
-            background: AppTheme.Colors.highlight.opacity(0.12),
-            accent: Image(systemName: "star.fill")
-        )
-    }
-}
-
-private struct TreasureMemoryCardBody: View {
-    let item: TreasureTimelineItem
-    let background: Color
-    let accent: Image?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                if let accent {
-                    accent
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(AppTheme.Colors.highlight)
-                }
-
+            VStack(alignment: .leading, spacing: 8) {
                 Text(metaText)
-                    .font(AppTheme.Typography.meta)
-                    .foregroundStyle(AppTheme.Colors.secondaryText)
-            }
+                    .font(.system(size: 12, weight: .medium))
+                    .tracking(0.4)
+                    .foregroundStyle(TreasureTheme.textSecondary)
 
-            if let image = previewImage {
-                image
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                if let note = item.note?.trimmed.nilIfEmpty {
+                    Text(note)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(TreasureTheme.textPrimary)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if item.hasImageLoadError {
+                    Text("这张照片暂时没有加载出来。")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(TreasureTheme.textSecondary.opacity(0.7))
+                }
             }
-
-            if item.hasImageLoadError, item.note != nil {
-                Text("这张照片暂时没有加载出来。")
-                    .font(AppTheme.Typography.meta)
-                    .foregroundStyle(AppTheme.Colors.tertiaryText)
-            }
-
-            if item.isMilestone {
-                TreasureMilestoneText(note: item.note)
-            } else if let note = item.note?.trimmed.nilIfEmpty {
-                Text(note)
-                    .font(AppTheme.Typography.cardBody)
-                    .foregroundStyle(AppTheme.Colors.primaryText)
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, TreasureTheme.contentPadding)
+            .padding(.vertical, TreasureTheme.contentPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background {
+            ZStack {
+                TreasureTheme.paperWhite
+                if item.isMilestone {
+                    TreasureTheme.terracottaGlow
+                }
             }
         }
-        .padding(20)
-        .background(background)
-        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+        .clipShape(TopRoundedCardShape(radius: TreasureTheme.cardRadius))
     }
 
-    private var previewImage: Image? {
-        guard let path = item.imageLocalPath, let image = UIImage(contentsOfFile: path) else { return nil }
-        return Image(uiImage: image)
+    private var loadedImages: [LoadedTreasureImage] {
+        item.imageLocalPaths.enumerated().compactMap { index, path in
+            guard let image = UIImage(contentsOfFile: path) else { return nil }
+            return LoadedTreasureImage(id: index, image: image)
+        }
     }
 
     private var metaText: String {
         let formatter = TreasureTimestampFormatter.shared
-        return formatter.string(from: item.createdAt, ageInDays: item.ageInDays)
+        let timestamp = formatter.string(from: item.createdAt, ageInDays: item.ageInDays)
+        return item.isMilestone ? "★ \(timestamp)" : timestamp
     }
 }
 
-private struct TreasureMilestoneText: View {
-    let note: String?
+private struct LoadedTreasureImage: Identifiable {
+    let id: Int
+    let image: UIImage
+}
+
+private struct MemoryMediaView: View {
+    let images: [LoadedTreasureImage]
 
     var body: some View {
-        if let content = note?.trimmed.nilIfEmpty {
-            let emphasis = emphasizedSegments(for: content)
-
-            VStack(alignment: .leading, spacing: emphasis.trailingText == nil ? 0 : 10) {
-                if let leadingText = emphasis.leadingText {
-                    Text(leadingText)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(AppTheme.Colors.primaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let trailingText = emphasis.trailingText {
-                    Text(trailingText)
-                        .font(AppTheme.Typography.cardBody)
-                        .foregroundStyle(AppTheme.Colors.primaryText)
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if emphasis.leadingText == nil {
-                    Text(content)
-                        .font(AppTheme.Typography.cardBody)
-                        .foregroundStyle(AppTheme.Colors.primaryText)
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+        if images.count == 1, let image = images.first {
+            SingleMemoryImageView(image: image.image)
+        } else {
+            MemoryCarouselView(images: images)
         }
     }
+}
 
-    private func emphasizedSegments(for content: String) -> (leadingText: String?, trailingText: String?) {
-        if let newlineRange = content.range(of: "\n") {
-            let leading = String(content[..<newlineRange.lowerBound]).trimmed
-            let trailing = String(content[newlineRange.upperBound...]).trimmed.nilIfEmpty
-            return (leading.nilIfEmpty, trailing)
-        }
+private struct SingleMemoryImageView: View {
+    let image: UIImage
 
-        let punctuation = CharacterSet(charactersIn: "。！？～")
-        let scalars = Array(content.unicodeScalars)
-        guard let terminalIndex = scalars.firstIndex(where: { punctuation.contains($0) }) else {
-            return (nil, nil)
-        }
+    var body: some View {
+        Color.clear
+            .aspectRatio(TreasureTheme.mediaAspectRatio, contentMode: .fit)
+            .overlay {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+            .clipped()
+    }
+}
 
-        let index = content.index(content.startIndex, offsetBy: terminalIndex + 1)
-        let firstLine = String(content[..<index]).trimmed
-        let rest = String(content[index...]).trimmed.nilIfEmpty
+private struct MemoryCarouselView: View {
+    let images: [LoadedTreasureImage]
 
-        guard firstLine.count <= 18 else {
-            return (nil, nil)
-        }
+    @State private var selection = 0
 
-        return (firstLine.nilIfEmpty, rest)
+    var body: some View {
+        Color.clear
+            .aspectRatio(TreasureTheme.mediaAspectRatio, contentMode: .fit)
+            .overlay {
+                ZStack(alignment: .bottom) {
+                    TabView(selection: $selection) {
+                        ForEach(images) { image in
+                            Image(uiImage: image.image)
+                                .resizable()
+                                .scaledToFill()
+                                .tag(image.id)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .always))
+
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.14),
+                            Color.clear
+                        ],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    )
+                    .frame(height: 36)
+                    .allowsHitTesting(false)
+                }
+            }
+            .clipped()
     }
 }
 

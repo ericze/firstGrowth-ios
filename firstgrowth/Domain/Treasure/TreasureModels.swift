@@ -1,34 +1,8 @@
 import CoreGraphics
 import Foundation
 
-enum TreasureFilter: String, CaseIterable, Identifiable {
-    case allMemories
-    case starredMoments
-    case timeLetters
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .allMemories:
-            "全部记忆"
-        case .starredMoments:
-            "⭐ 星标时刻"
-        case .timeLetters:
-            "✉️ 时光信笺"
-        }
-    }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .allMemories:
-            "查看全部记忆"
-        case .starredMoments:
-            "查看星标时刻"
-        case .timeLetters:
-            "查看时光信笺"
-        }
-    }
+enum TreasureLimits {
+    static let maxImagesPerEntry = 6
 }
 
 enum WeeklyLetterDensity: String, Codable, CaseIterable {
@@ -51,7 +25,7 @@ struct TreasureTimelineItem: Identifiable, Equatable {
     let createdAt: Date
     let monthKey: String
     let ageInDays: Int?
-    let imageLocalPath: String?
+    let imageLocalPaths: [String]
     let note: String?
     let hasImageLoadError: Bool
     let isMilestone: Bool
@@ -79,11 +53,11 @@ struct TreasureMonthAnchor: Identifiable, Equatable {
 
 struct TreasureComposeDraft: Equatable {
     var note: String = ""
-    var imageLocalPath: String?
+    var imageLocalPaths: [String] = []
     var isMilestone = false
 
     var hasImage: Bool {
-        !(imageLocalPath?.trimmed.isEmpty ?? true)
+        !imageLocalPaths.isEmpty
     }
 
     var hasText: Bool {
@@ -100,7 +74,7 @@ struct TreasureComposeDraft: Equatable {
 
     mutating func reset() {
         note = ""
-        imageLocalPath = nil
+        imageLocalPaths = []
         isMilestone = false
     }
 }
@@ -119,12 +93,6 @@ enum TreasureScrollIntentState: Equatable {
     case reversingUp
     case fastScrolling
     case monthScrubbing
-}
-
-enum TreasureFilterBarVisibilityState: Equatable {
-    case inlineVisible
-    case hiddenByScroll
-    case pinnedVisible
 }
 
 enum TreasureMonthScrubberState: Equatable {
@@ -159,10 +127,8 @@ enum TreasureWeeklyLetterViewState: Equatable {
 }
 
 struct TreasureViewState: Equatable {
-    var currentFilter: TreasureFilter = .allMemories
     var dataState: TreasureDataState = .loading
     var scrollIntentState: TreasureScrollIntentState = .idle
-    var filterBarVisibility: TreasureFilterBarVisibilityState = .inlineVisible
     var monthScrubberState: TreasureMonthScrubberState = .hidden
     var composeState: TreasureComposeState = .closed
     var weeklyLetterViewState: TreasureWeeklyLetterViewState = .collapsed
@@ -184,7 +150,6 @@ struct TreasureViewState: Equatable {
 
 enum TreasureAction {
     case onAppear
-    case selectFilter(TreasureFilter)
     case didScroll(offset: CGFloat, timestamp: TimeInterval)
     case tapAddToday
     case dismissCompose
@@ -192,8 +157,9 @@ enum TreasureAction {
     case cancelDiscard
     case updateNote(String)
     case toggleMilestone
-    case setImagePath(String?)
-    case removeImage
+    case appendImagePaths([String])
+    case replaceImagePaths([String])
+    case removeImage(at: Int)
     case saveCompose
     case retrySaveCompose
     case dismissComposeError

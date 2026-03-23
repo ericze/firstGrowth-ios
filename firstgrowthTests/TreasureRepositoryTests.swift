@@ -10,7 +10,7 @@ final class TreasureRepositoryTests: XCTestCase {
 
         let entry = try environment.treasureRepository.createMemoryEntry(
             note: "  会抬头了  ",
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             isMilestone: true,
             createdAt: environment.now.value,
             birthDate: birthDate
@@ -18,7 +18,24 @@ final class TreasureRepositoryTests: XCTestCase {
 
         XCTAssertEqual(entry.ageInDays, 10)
         XCTAssertEqual(entry.note, "会抬头了")
+        XCTAssertTrue(entry.imageLocalPaths.isEmpty)
         XCTAssertEqual(try environment.treasureRepository.fetchMemoryEntries().count, 1)
+    }
+
+    func testCreateMemoryEntryTruncatesToMaximumImageCount() throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let imagePaths = (0..<8).map { "/tmp/treasure-image-\($0).jpg" }
+
+        let entry = try environment.treasureRepository.createMemoryEntry(
+            note: nil,
+            imageLocalPaths: imagePaths,
+            isMilestone: false,
+            createdAt: environment.now.value,
+            birthDate: HomeHeaderConfig.placeholder.birthDate
+        )
+
+        XCTAssertEqual(entry.imageLocalPaths, Array(imagePaths.prefix(TreasureLimits.maxImagesPerEntry)))
+        XCTAssertNil(entry.imageLocalPath)
     }
 
     func testSyncWeeklyLetterUpsertsAndRemovesAffectedWeek() throws {
@@ -29,7 +46,7 @@ final class TreasureRepositoryTests: XCTestCase {
 
         let entry = try environment.treasureRepository.createMemoryEntry(
             note: "这一周留下了第一条。",
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             isMilestone: false,
             createdAt: environment.now.value,
             birthDate: HomeHeaderConfig.placeholder.birthDate

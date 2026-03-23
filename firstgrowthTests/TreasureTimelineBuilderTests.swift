@@ -32,29 +32,31 @@ final class TreasureTimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items.first?.monthKey, "2024-03")
     }
 
-    func testFilterReturnsOnlyMatchingTreasureItems() {
+    func testFallsBackToLegacySingleImagePathWhenArrayIsEmpty() throws {
         let builder = TreasureTimelineBuilder(calendar: calendar)
         let now = Date(timeIntervalSince1970: 1_710_000_000)
+        let legacyImagePath = try makeTemporaryImagePath()
+
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyImagePath)
+        }
+
         let items = builder.makeTimelineItems(
             entries: [
-                MemoryEntry(createdAt: now, ageInDays: 20, imageLocalPath: nil, note: "日常。", isMilestone: false),
-                MemoryEntry(createdAt: now.addingTimeInterval(-100), ageInDays: 19, imageLocalPath: nil, note: "会翻身了。", isMilestone: true),
-            ],
-            weeklyLetters: [
-                WeeklyLetter(
-                    weekStart: now.addingTimeInterval(-86_400),
-                    weekEnd: now,
-                    density: .silent,
-                    collapsedText: "这一周，被轻轻收下了。",
-                    expandedText: "这一周只留下了一条记忆，日子照常往前。",
-                    generatedAt: now
+                MemoryEntry(
+                    createdAt: now,
+                    ageInDays: 20,
+                    imageLocalPaths: [],
+                    imageLocalPath: legacyImagePath,
+                    note: nil,
+                    isMilestone: false
                 )
-            ]
+            ],
+            weeklyLetters: []
         )
 
-        XCTAssertEqual(builder.filter(items, by: .allMemories).count, 3)
-        XCTAssertEqual(builder.filter(items, by: .starredMoments).map(\.type), [.milestone])
-        XCTAssertEqual(builder.filter(items, by: .timeLetters).map(\.type), [.weeklyLetterSilent])
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.imageLocalPaths, [legacyImagePath])
     }
 
     func testDropsUnreadableImageWithoutTextAndKeepsTextFallback() {
@@ -70,7 +72,33 @@ final class TreasureTimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items.first?.note, "还有一句话。")
         XCTAssertEqual(items.first?.hasImageLoadError, true)
-        XCTAssertNil(items.first?.imageLocalPath)
+        XCTAssertTrue(items.first?.imageLocalPaths.isEmpty == true)
+    }
+
+    func testDropsUnreadablePathsFromMultiImageEntries() throws {
+        let builder = TreasureTimelineBuilder(calendar: calendar, fileManager: .default)
+        let now = Date(timeIntervalSince1970: 1_710_000_000)
+        let readableImagePath = try makeTemporaryImagePath()
+
+        defer {
+            try? FileManager.default.removeItem(atPath: readableImagePath)
+        }
+
+        let items = builder.makeTimelineItems(
+            entries: [
+                MemoryEntry(
+                    createdAt: now,
+                    ageInDays: 20,
+                    imageLocalPaths: [readableImagePath, "/tmp/missing-image.jpg"],
+                    note: "还有一张能看到。",
+                    isMilestone: false
+                )
+            ],
+            weeklyLetters: []
+        )
+
+        XCTAssertEqual(items.first?.imageLocalPaths, [readableImagePath])
+        XCTAssertEqual(items.first?.hasImageLoadError, true)
     }
 
     func testWeeklyLetterUsesEndOfWeekDayForDisplayOrdering() {
@@ -101,5 +129,12 @@ final class TreasureTimelineBuilderTests: XCTestCase {
         )
 
         XCTAssertEqual(items.map(\.type), [.weeklyLetterNormal, .memory])
+    }
+
+    private func makeTemporaryImagePath() throws -> String {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("treasure-test-\(UUID().uuidString).jpg")
+        try Data("test".utf8).write(to: fileURL)
+        return fileURL.path
     }
 }

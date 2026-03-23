@@ -20,7 +20,9 @@ struct WeeklyLetterComposer {
         guard !entries.isEmpty else { return nil }
 
         let normalizedEntries = entries.sorted { $0.createdAt < $1.createdAt }
-        let photoCount = normalizedEntries.filter { !($0.imageLocalPath?.trimmed.isEmpty ?? true) }.count
+        let photoCount = normalizedEntries.reduce(into: 0) { partialResult, entry in
+            partialResult += normalizedImageCount(for: entry)
+        }
         let textCount = normalizedEntries.filter { !($0.note?.trimmed.isEmpty ?? true) }.count
         let milestoneCount = normalizedEntries.filter(\.isMilestone).count
         let density = makeDensity(entryCount: normalizedEntries.count, milestoneCount: milestoneCount)
@@ -131,6 +133,14 @@ struct WeeklyLetterComposer {
         }
 
         return text.count <= maxLength
+    }
+
+    private func normalizedImageCount(for entry: MemoryEntry) -> Int {
+        let multiImageCount = entry.imageLocalPaths.compactMap { $0.trimmed.nilIfEmpty }.count
+        if multiImageCount > 0 {
+            return multiImageCount
+        }
+        return entry.imageLocalPath?.trimmed.nilIfEmpty == nil ? 0 : 1
     }
 }
 

@@ -23,27 +23,13 @@ struct TreasureTimelineBuilder {
         }
     }
 
-    func filter(
-        _ items: [TreasureTimelineItem],
-        by filter: TreasureFilter
-    ) -> [TreasureTimelineItem] {
-        switch filter {
-        case .allMemories:
-            items
-        case .starredMoments:
-            items.filter { $0.type == .milestone }
-        case .timeLetters:
-            items.filter(\.isWeeklyLetter)
-        }
-    }
-
     private func makeMemoryItem(entry: MemoryEntry) -> TreasureTimelineItem? {
         let note = entry.note?.trimmed.nilIfEmpty
-        let path = entry.imageLocalPath?.trimmed.nilIfEmpty
-        let hasReadableImage = path.flatMap { fileManager.fileExists(atPath: $0) ? $0 : nil }
-        let hasImageLoadError = path != nil && hasReadableImage == nil
+        let candidatePaths = normalizedImageLocalPaths(for: entry)
+        let readablePaths = candidatePaths.filter { fileManager.fileExists(atPath: $0) }
+        let hasImageLoadError = !candidatePaths.isEmpty && readablePaths.count != candidatePaths.count
 
-        guard hasReadableImage != nil || note != nil else {
+        guard !readablePaths.isEmpty || note != nil else {
             return nil
         }
 
@@ -53,7 +39,7 @@ struct TreasureTimelineBuilder {
             createdAt: entry.createdAt,
             monthKey: monthKey(for: entry.createdAt),
             ageInDays: entry.ageInDays,
-            imageLocalPath: hasReadableImage,
+            imageLocalPaths: readablePaths,
             note: note,
             hasImageLoadError: hasImageLoadError,
             isMilestone: entry.isMilestone,
@@ -83,7 +69,7 @@ struct TreasureTimelineBuilder {
             createdAt: displayDate,
             monthKey: monthKey(for: displayDate),
             ageInDays: nil,
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             note: nil,
             hasImageLoadError: false,
             isMilestone: false,
@@ -105,6 +91,14 @@ struct TreasureTimelineBuilder {
     private func endOfDay(for date: Date) -> Date {
         let start = calendar.startOfDay(for: date)
         return calendar.date(byAdding: DateComponents(day: 1, second: -1), to: start) ?? date
+    }
+
+    private func normalizedImageLocalPaths(for entry: MemoryEntry) -> [String] {
+        let normalizedPaths = entry.imageLocalPaths.compactMap { $0.trimmed.nilIfEmpty }
+        if !normalizedPaths.isEmpty {
+            return normalizedPaths
+        }
+        return [entry.imageLocalPath?.trimmed.nilIfEmpty].compactMap { $0 }
     }
 }
 

@@ -10,14 +10,14 @@ final class TreasureStoreTests: XCTestCase {
 
         _ = try environment.treasureRepository.createMemoryEntry(
             note: "一月的一条。",
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             isMilestone: false,
             createdAt: Date(timeIntervalSince1970: 1_704_067_200),
             birthDate: HomeHeaderConfig.placeholder.birthDate
         )
         _ = try environment.treasureRepository.createMemoryEntry(
             note: "三月的一条。",
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             isMilestone: false,
             createdAt: environment.now.value,
             birthDate: HomeHeaderConfig.placeholder.birthDate
@@ -37,7 +37,7 @@ final class TreasureStoreTests: XCTestCase {
         _ = calendar
     }
 
-    func testSwitchingFilterClosesWeeklyLetterAndRequestsScrollToTop() throws {
+    func testTimelineLoadsMixedItemsByDefault() throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
         let store = makeTreasureStore(environment: environment)
         let weekStart = Calendar(identifier: .gregorian).date(
@@ -46,7 +46,7 @@ final class TreasureStoreTests: XCTestCase {
 
         _ = try environment.treasureRepository.createMemoryEntry(
             note: "会站一下了。",
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             isMilestone: true,
             createdAt: environment.now.value,
             birthDate: HomeHeaderConfig.placeholder.birthDate
@@ -58,19 +58,9 @@ final class TreasureStoreTests: XCTestCase {
         )
 
         store.onAppear()
-        guard let letter = store.viewState.timelineItems.first(where: \.canOpenWeeklyLetter) else {
-            return XCTFail("Expected weekly letter in timeline")
-        }
-
-        store.handle(.tapWeeklyLetter(letter.id))
-        XCTAssertNotNil(store.viewState.selectedWeeklyLetter)
-
-        store.handle(.selectFilter(.starredMoments))
-
-        XCTAssertNil(store.viewState.selectedWeeklyLetter)
-        XCTAssertEqual(store.viewState.weeklyLetterViewState, .collapsed)
-        XCTAssertEqual(store.viewState.currentFilter, .starredMoments)
-        XCTAssertEqual(store.viewState.scrollTargetID, store.viewState.timelineItems.first?.id)
+        XCTAssertTrue(store.viewState.timelineItems.contains(where: { $0.type == .milestone }))
+        XCTAssertTrue(store.viewState.timelineItems.contains(where: \.isWeeklyLetter))
+        XCTAssertFalse(store.viewState.timelineItems.isEmpty)
     }
 
     func testMilestoneOnlyDraftRequestsDiscardConfirmation() throws {
@@ -106,6 +96,25 @@ final class TreasureStoreTests: XCTestCase {
         XCTAssertTrue(try environment.treasureRepository.fetchWeeklyLetters().isEmpty)
         XCTAssertEqual(store.viewState.dataState, .empty)
         XCTAssertNil(store.viewState.undoToast)
+    }
+
+    func testDiscardingDraftRemovesAllDraftImages() throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        var removedPaths: [String] = []
+        let store = makeTreasureStore(environment: environment, imageRemover: { removedPaths.append(contentsOf: $0) })
+
+        store.onAppear()
+        store.handle(.tapAddToday)
+        store.handle(.appendImagePaths(["/tmp/a.jpg", "/tmp/b.jpg"]))
+        store.handle(.dismissCompose)
+
+        XCTAssertEqual(store.viewState.composeState, .confirmingDiscard)
+
+        store.handle(.confirmDiscard)
+
+        XCTAssertEqual(removedPaths, ["/tmp/a.jpg", "/tmp/b.jpg"])
+        XCTAssertTrue(store.viewState.composeDraft.imageLocalPaths.isEmpty)
+        XCTAssertEqual(store.viewState.composeState, .closed)
     }
 
     func testUndoClosesWeeklyLetterWhenAffectedCardDisappears() throws {

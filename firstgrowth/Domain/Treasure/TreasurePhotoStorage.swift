@@ -25,6 +25,12 @@ enum TreasurePhotoStorage {
         try? FileManager.default.removeItem(atPath: path)
     }
 
+    static func removeImages(at paths: [String]) {
+        for path in paths where !path.isEmpty {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+    }
+
     private static var storageDirectoryURL: URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return root.appendingPathComponent("TreasurePhotos", isDirectory: true)

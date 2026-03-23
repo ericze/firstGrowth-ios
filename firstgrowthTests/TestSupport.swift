@@ -89,7 +89,8 @@ func makeGrowthStore(
 @MainActor
 func makeTreasureStore(
     environment: TestEnvironment,
-    monthHintStore: TreasureMonthHintStore? = nil
+    monthHintStore: TreasureMonthHintStore? = nil,
+    imageRemover: @escaping @MainActor ([String]) -> Void = { _ in }
 ) -> TreasureStore {
     let calendar = Calendar(identifier: .gregorian)
 
@@ -105,6 +106,6 @@ func makeTreasureStore(
         ),
         calendar: calendar,
         dateProvider: { environment.now.value },
-        imageRemover: { _ in }
+        imageRemover: imageRemover
     )
 }

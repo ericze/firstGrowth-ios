@@ -6,11 +6,12 @@ import UIKit
 struct TreasureComposeModal: View {
     @Bindable var store: TreasureStore
 
-    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isShowingPhotoSourcePicker = false
     @State private var isShowingLibraryPicker = false
     @State private var isShowingCamera = false
     @State private var capturedImage: UIImage?
+    @State private var focusedPhotoIndex = 0
     @FocusState private var isNoteFocused: Bool
 
     var body: some View {
@@ -24,10 +25,12 @@ struct TreasureComposeModal: View {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 24) {
                         TreasureComposePhotoSection(
-                            imagePath: store.viewState.composeDraft.imageLocalPath,
+                            imagePaths: store.viewState.composeDraft.imageLocalPaths,
+                            focusedIndex: $focusedPhotoIndex,
                             isInteractionEnabled: !isNoteFocused,
+                            canAddMoreImages: remainingPhotoSlots > 0,
                             onTapAdd: { isShowingPhotoSourcePicker = true },
-                            onRemove: { store.handle(.removeImage) }
+                            onRemove: removeImage(at:)
                         )
 
                         TreasureComposeNoteSection(
@@ -57,14 +60,22 @@ struct TreasureComposeModal: View {
             }
             .background(AppTheme.Colors.background.ignoresSafeArea())
             .confirmationDialog("添加照片", isPresented: $isShowingPhotoSourcePicker) {
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                if UIImagePickerController.isSourceTypeAvailable(.camera), remainingPhotoSlots > 0 {
                     Button("拍照") {
                         isShowingCamera = true
                     }
                 }
 
-                Button("从相册选择") {
-                    isShowingLibraryPicker = true
+                if remainingPhotoSlots > 0 {
+                    Button("从相册选择") {
+                        isShowingLibraryPicker = true
+                    }
+                } else {
+                    Button("最多可放 6 张") {}
+                }
+            } message: {
+                if remainingPhotoSlots == 0 {
+                    Text("这一条记忆最多放 6 张照片。")
                 }
             }
             .confirmationDialog("放弃这条记录？", isPresented: Binding(
@@ -101,25 +112,35 @@ struct TreasureComposeModal: View {
             }
             .photosPicker(
                 isPresented: $isShowingLibraryPicker,
-                selection: $selectedPhotoItem,
+                selection: $selectedPhotoItems,
+                maxSelectionCount: remainingPhotoSlots,
                 matching: .images
             )
             .sheet(isPresented: $isShowingCamera) {
                 SystemImagePicker(image: $capturedImage, sourceType: .camera)
             }
-            .onChange(of: selectedPhotoItem) { _, newItem in
-                guard let newItem else { return }
+            .onChange(of: selectedPhotoItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
                 Task {
-                    await persistPhotoItem(newItem)
-                    selectedPhotoItem = nil
+                    await persistPhotoItems(newItems)
+                    await MainActor.run {
+                        selectedPhotoItems = []
+                    }
                 }
             }
             .onChange(of: capturedImage) { _, newImage in
                 guard let newImage else { return }
                 persistCapturedImage(newImage)
             }
+            .onChange(of: store.viewState.composeDraft.imageLocalPaths) { _, newPaths in
+                focusedPhotoIndex = max(0, min(focusedPhotoIndex, max(newPaths.count - 1, 0)))
+            }
         }
         .interactiveDismissDisabled(store.viewState.composeDraft.hasAnyUserIntent)
+    }
+
+    private var remainingPhotoSlots: Int {
+        max(TreasureLimits.maxImagesPerEntry - store.viewState.composeDraft.imageLocalPaths.count, 0)
     }
 
     private func dismissNoteFocus() {
@@ -153,23 +174,40 @@ struct TreasureComposeModal: View {
     }
 
     @MainActor
-    private func persistPhotoItem(_ item: PhotosPickerItem) async {
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else { return }
-            let imagePath = try TreasurePhotoStorage.storeImageData(data)
-            store.handle(.setImagePath(imagePath))
-        } catch {
-            assertionFailure("Treasure photo library import failed: \(error)")
+    private func persistPhotoItems(_ items: [PhotosPickerItem]) async {
+        var storedPaths: [String] = []
+
+        for item in items.prefix(remainingPhotoSlots) {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                let imagePath = try TreasurePhotoStorage.storeImageData(data)
+                storedPaths.append(imagePath)
+            } catch {
+                assertionFailure("Treasure photo library import failed: \(error)")
+            }
         }
+
+        guard !storedPaths.isEmpty else { return }
+
+        store.handle(.appendImagePaths(storedPaths))
+        focusedPhotoIndex = max(store.viewState.composeDraft.imageLocalPaths.count - 1, 0)
+    }
+
+    private func removeImage(at index: Int) {
+        store.handle(.removeImage(at: index))
+        focusedPhotoIndex = max(0, min(focusedPhotoIndex, max(store.viewState.composeDraft.imageLocalPaths.count - 1, 0)))
     }
 
     @MainActor
     private func persistCapturedImage(_ image: UIImage) {
         defer { capturedImage = nil }
 
+        guard remainingPhotoSlots > 0 else { return }
+
         do {
             let imagePath = try TreasurePhotoStorage.storeImage(image)
-            store.handle(.setImagePath(imagePath))
+            store.handle(.appendImagePaths([imagePath]))
+            focusedPhotoIndex = max(store.viewState.composeDraft.imageLocalPaths.count - 1, 0)
         } catch {
             assertionFailure("Treasure camera store failed: \(error)")
         }
@@ -177,27 +215,39 @@ struct TreasureComposeModal: View {
 }
 
 private struct TreasureComposePhotoSection: View {
-    let imagePath: String?
+    let imagePaths: [String]
+    @Binding var focusedIndex: Int
     let isInteractionEnabled: Bool
+    let canAddMoreImages: Bool
     let onTapAdd: () -> Void
-    let onRemove: () -> Void
+    let onRemove: (Int) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("一张照片（可选）")
-                .font(AppTheme.Typography.meta)
-                .foregroundStyle(AppTheme.Colors.secondaryText)
+            HStack {
+                Text("照片（可选）")
+                    .font(AppTheme.Typography.meta)
+                    .foregroundStyle(AppTheme.Colors.secondaryText)
 
-            if let imagePath, let image = UIImage(contentsOfFile: imagePath) {
+                Spacer()
+
+                Text("\(loadedImages.count)/\(TreasureLimits.maxImagesPerEntry)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(AppTheme.Colors.tertiaryText)
+            }
+
+            if let activeImage = selectedImage {
                 ZStack(alignment: .topTrailing) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 320)
+                    Color.clear
+                        .aspectRatio(TreasureTheme.mediaAspectRatio, contentMode: .fit)
+                        .overlay {
+                            Image(uiImage: activeImage.image)
+                                .resizable()
+                                .scaledToFill()
+                        }
                         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
 
-                    Button(action: onRemove) {
+                    Button(action: { onRemove(activeImage.id) }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(AppTheme.Colors.primaryText)
@@ -207,11 +257,52 @@ private struct TreasureComposePhotoSection: View {
                             .padding(14)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("删除照片")
+                    .accessibilityLabel("删除当前照片")
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
                 .allowsHitTesting(isInteractionEnabled)
-                .onTapGesture(perform: onTapAdd)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(loadedImages) { item in
+                            Button {
+                                focusedIndex = item.id
+                            } label: {
+                                Image(uiImage: item.image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 72, height: 72)
+                                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                            .stroke(
+                                                item.id == selectedImage?.id ? TreasureTheme.sageDeep : Color.clear,
+                                                lineWidth: 1.5
+                                            )
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if canAddMoreImages {
+                            Button(action: onTapAdd) {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "plus.viewfinder")
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundStyle(TreasureTheme.sageDeep)
+
+                                    Text("继续添加")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(AppTheme.Colors.secondaryText)
+                                }
+                                .frame(width: 90, height: 72)
+                                .background(AppTheme.Colors.cardBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .allowsHitTesting(isInteractionEnabled)
             } else {
                 Button(action: onTapAdd) {
                     VStack(spacing: 10) {
@@ -219,9 +310,13 @@ private struct TreasureComposePhotoSection: View {
                             .font(.system(size: 26, weight: .light))
                             .foregroundStyle(AppTheme.Colors.secondaryText)
 
-                        Text("留下一张画面")
+                        Text("留下一组画面")
                             .font(AppTheme.Typography.sheetBody)
                             .foregroundStyle(AppTheme.Colors.secondaryText)
+
+                        Text("最多 6 张，按选择顺序排开。")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(AppTheme.Colors.tertiaryText)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 240)
@@ -234,6 +329,22 @@ private struct TreasureComposePhotoSection: View {
             }
         }
     }
+
+    private var loadedImages: [LoadedComposeImage] {
+        imagePaths.enumerated().compactMap { index, path in
+            guard let image = UIImage(contentsOfFile: path) else { return nil }
+            return LoadedComposeImage(id: index, image: image)
+        }
+    }
+
+    private var selectedImage: LoadedComposeImage? {
+        loadedImages.first(where: { $0.id == focusedIndex }) ?? loadedImages.first
+    }
+}
+
+private struct LoadedComposeImage: Identifiable {
+    let id: Int
+    let image: UIImage
 }
 
 private struct TreasureComposeNoteSection: View {

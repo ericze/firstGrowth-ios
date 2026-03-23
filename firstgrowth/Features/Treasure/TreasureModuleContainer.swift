@@ -3,60 +3,33 @@ import SwiftUI
 
 struct TreasureModuleContainer: View {
     @Bindable var store: TreasureStore
-    private let addButtonTopInset: CGFloat = 14
-    private let addButtonReservedHeight: CGFloat = 64
-    private let addButtonReservedWidth: CGFloat = 122
 
     var body: some View {
         GeometryReader { geometry in
             ScrollViewReader { proxy in
                 ZStack(alignment: .topTrailing) {
-                    ScrollView(showsIndicators: false) {
-                        TreasureScrollOffsetReader()
+                    VStack(spacing: 0) {
+                        TreasureHeaderBar(action: { store.handle(.tapAddToday) })
+                            .padding(.horizontal, TreasureTheme.listHorizontalPadding)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
 
-                        VStack(alignment: .leading, spacing: AppTheme.Spacing.section) {
-                            TreasureTopFilterBar(
-                                selectedFilter: store.viewState.currentFilter,
-                                onSelect: { store.handle(.selectFilter($0)) }
-                            )
-                            .padding(.top, addButtonReservedHeight)
-                            .padding(.trailing, addButtonReservedWidth)
+                        ScrollView(showsIndicators: false) {
+                            TreasureScrollOffsetReader()
 
                             TreasureTimelineList(
                                 dataState: store.viewState.dataState,
-                                filter: store.viewState.currentFilter,
                                 items: store.viewState.timelineItems,
                                 errorMessage: store.viewState.errorMessage,
                                 onTapWeeklyLetter: { store.handle(.tapWeeklyLetter($0)) }
                             )
-
-                            Spacer(minLength: 160)
+                            .padding(.horizontal, TreasureTheme.listHorizontalPadding)
+                            .padding(.top, TreasureTheme.listTopPadding)
+                            .padding(.bottom, TreasureTheme.listBottomPadding)
                         }
-                        .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
-                        .padding(.bottom, 24)
+                        .coordinateSpace(name: TreasureScrollOffsetReader.coordinateSpaceName)
                     }
-                    .coordinateSpace(name: TreasureScrollOffsetReader.coordinateSpaceName)
-                    .background(AppTheme.Colors.background)
-
-                    if store.viewState.filterBarVisibility == .pinnedVisible {
-                        TreasureTopFilterBar(
-                            selectedFilter: store.viewState.currentFilter,
-                            onSelect: { store.handle(.selectFilter($0)) }
-                        )
-                        .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
-                        .padding(.top, addButtonReservedHeight)
-                        .padding(.trailing, addButtonReservedWidth)
-                        .background(
-                            AppTheme.Colors.background
-                                .opacity(0.96)
-                                .ignoresSafeArea(edges: .top)
-                        )
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-
-                    TreasureAddEntryButton(action: { store.handle(.tapAddToday) })
-                        .padding(.top, addButtonTopInset)
-                        .padding(.trailing, AppTheme.Spacing.screenHorizontal)
+                    .background(TreasureTheme.pageBackground)
 
                     if store.viewState.monthScrubberState != .hidden {
                         TreasureMonthScrubber(
@@ -71,12 +44,12 @@ struct TreasureModuleContainer: View {
                             },
                             onEnd: { store.handle(.endMonthScrubbing) }
                         )
-                        .padding(.trailing, 8)
-                        .padding(.top, geometry.size.height * 0.28)
+                        .padding(.trailing, 6)
+                        .padding(.top, geometry.size.height * 0.26)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
-                .animation(AppTheme.stateAnimation, value: store.viewState.filterBarVisibility)
+                .background(TreasureTheme.pageBackground.ignoresSafeArea())
                 .animation(AppTheme.stateAnimation, value: store.viewState.monthScrubberState)
                 .onPreferenceChange(TreasureScrollOffsetPreferenceKey.self) { offset in
                     store.handle(.didScroll(offset: offset, timestamp: Date().timeIntervalSinceReferenceDate))
@@ -92,7 +65,7 @@ struct TreasureModuleContainer: View {
                     TreasureWeeklyLetterSheet(item: item, onClose: { store.handle(.dismissWeeklyLetter) })
                         .presentationDetents(item.letterDensity == .dense ? [.medium, .large] : [.height(420), .medium])
                         .presentationDragIndicator(.visible)
-                        .presentationBackground(AppTheme.Colors.background)
+                        .presentationBackground(TreasureTheme.pageBackground)
                 }
                 .fullScreenCover(isPresented: composeBinding) {
                     TreasureComposeModal(store: store)

@@ -16,13 +16,12 @@ final class TreasureStore {
     @ObservationIgnored private let monthHintStore: TreasureMonthHintStore
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private let dateProvider: () -> Date
-    @ObservationIgnored private let imageRemover: @MainActor (String?) -> Void
+    @ObservationIgnored private let imageRemover: @MainActor ([String]) -> Void
     @ObservationIgnored private var undoDismissTask: Task<Void, Never>?
     @ObservationIgnored private var monthScrubberFadeTask: Task<Void, Never>?
     @ObservationIgnored private var monthHintTask: Task<Void, Never>?
     @ObservationIgnored private var lastScrollOffset: CGFloat?
     @ObservationIgnored private var lastScrollTimestamp: TimeInterval?
-    @ObservationIgnored private var upwardRecoveryDistance: CGFloat = 0
 
     init(
         headerConfig: HomeHeaderConfig,
@@ -33,7 +32,7 @@ final class TreasureStore {
         monthHintStore: TreasureMonthHintStore? = nil,
         calendar: Calendar = .current,
         dateProvider: @escaping () -> Date = Date.init,
-        imageRemover: @escaping @MainActor (String?) -> Void = TreasurePhotoStorage.removeImage
+        imageRemover: @escaping @MainActor ([String]) -> Void = TreasurePhotoStorage.removeImages(at:)
     ) {
         var resolvedCalendar = calendar
         resolvedCalendar.firstWeekday = 2
@@ -95,9 +94,6 @@ extension TreasureStore {
             refreshTimeline()
             viewState.hasLoadedInitialData = true
 
-        case let .selectFilter(filter):
-            selectFilter(filter)
-
         case let .didScroll(offset, timestamp):
             updateScroll(offset: offset, timestamp: timestamp)
 
@@ -122,11 +118,14 @@ extension TreasureStore {
             refreshComposeState()
             AppHaptics.selection()
 
-        case let .setImagePath(path):
-            setImagePath(path)
+        case let .appendImagePaths(paths):
+            appendImagePaths(paths)
 
-        case .removeImage:
-            removeDraftImage()
+        case let .replaceImagePaths(paths):
+            replaceImagePaths(paths)
+
+        case let .removeImage(at: index):
+            removeDraftImage(at: index)
 
         case .saveCompose:
             saveCompose()
@@ -161,17 +160,6 @@ extension TreasureStore {
         }
     }
 
-    private func selectFilter(_ filter: TreasureFilter) {
-        guard viewState.currentFilter != filter else { return }
-        viewState.currentFilter = filter
-        closeWeeklyLetter()
-        resetMonthScrubber()
-        resetScrollTracking()
-        refreshTimeline()
-        requestScrollToTop()
-        AppHaptics.selection()
-    }
-
     private func updateScroll(offset: CGFloat, timestamp: TimeInterval) {
         guard viewState.hasLoadedInitialData else { return }
         defer {
@@ -188,21 +176,13 @@ extension TreasureStore {
         let velocity = abs(delta) / duration
 
         if offset >= -24 {
-            upwardRecoveryDistance = 0
-            viewState.filterBarVisibility = .inlineVisible
             if viewState.scrollIntentState != .monthScrubbing {
                 viewState.scrollIntentState = .idle
             }
         } else if delta < -0.5 {
-            upwardRecoveryDistance = 0
             viewState.scrollIntentState = velocity > 1500 ? .fastScrolling : .readingDown
-            viewState.filterBarVisibility = .hiddenByScroll
         } else if delta > 0.5 {
-            upwardRecoveryDistance += delta
             viewState.scrollIntentState = .reversingUp
-            if offset < -60 && upwardRecoveryDistance >= 32 {
-                viewState.filterBarVisibility = .pinnedVisible
-            }
         }
 
         guard viewState.monthAnchors.count >= 2 else {
@@ -236,21 +216,46 @@ extension TreasureStore {
         closeCompose(removeDraftAssets: true)
     }
 
-    private func setImagePath(_ path: String?) {
-        let normalizedPath = path?.trimmed.nilIfEmpty
-        if viewState.composeDraft.imageLocalPath != normalizedPath {
-            imageRemover(viewState.composeDraft.imageLocalPath)
+    private func appendImagePaths(_ paths: [String]) {
+        let normalizedPaths = normalizeImagePaths(paths)
+        guard !normalizedPaths.isEmpty else { return }
+
+        let existingPaths = viewState.composeDraft.imageLocalPaths
+        let combinedPaths = existingPaths + normalizedPaths
+        let keptPaths = Array(combinedPaths.prefix(TreasureLimits.maxImagesPerEntry))
+        let overflowPaths = Array(combinedPaths.dropFirst(TreasureLimits.maxImagesPerEntry))
+
+        if !overflowPaths.isEmpty {
+            imageRemover(overflowPaths)
         }
-        viewState.composeDraft.imageLocalPath = normalizedPath
+
+        viewState.composeDraft.imageLocalPaths = keptPaths
         refreshComposeState()
-        if normalizedPath != nil {
+
+        if keptPaths != existingPaths {
             AppHaptics.lightImpact()
         }
     }
 
-    private func removeDraftImage() {
-        imageRemover(viewState.composeDraft.imageLocalPath)
-        viewState.composeDraft.imageLocalPath = nil
+    private func replaceImagePaths(_ paths: [String]) {
+        let normalizedPaths = normalizeImagePaths(paths)
+        let keptPaths = Array(normalizedPaths.prefix(TreasureLimits.maxImagesPerEntry))
+        let overflowPaths = Array(normalizedPaths.dropFirst(TreasureLimits.maxImagesPerEntry))
+        let removedPaths = viewState.composeDraft.imageLocalPaths.filter { !keptPaths.contains($0) }
+
+        if !removedPaths.isEmpty || !overflowPaths.isEmpty {
+            imageRemover(removedPaths + overflowPaths)
+        }
+
+        viewState.composeDraft.imageLocalPaths = keptPaths
+        refreshComposeState()
+    }
+
+    private func removeDraftImage(at index: Int) {
+        guard viewState.composeDraft.imageLocalPaths.indices.contains(index) else { return }
+
+        let removedPath = viewState.composeDraft.imageLocalPaths.remove(at: index)
+        imageRemover([removedPath])
         refreshComposeState()
     }
 
@@ -264,7 +269,7 @@ extension TreasureStore {
             let now = dateProvider()
             let createdEntry = try repository.createMemoryEntry(
                 note: viewState.composeDraft.note,
-                imageLocalPath: viewState.composeDraft.imageLocalPath,
+                imageLocalPaths: viewState.composeDraft.imageLocalPaths,
                 isMilestone: viewState.composeDraft.isMilestone,
                 createdAt: now,
                 birthDate: headerConfig.birthDate
@@ -348,15 +353,14 @@ extension TreasureStore {
             let entries = try repository.fetchMemoryEntries()
             let weeklyLetters = try repository.fetchWeeklyLetters()
             let allItems = timelineBuilder.makeTimelineItems(entries: entries, weeklyLetters: weeklyLetters)
-            let filteredItems = timelineBuilder.filter(allItems, by: viewState.currentFilter)
-            let anchors = monthAnchorBuilder.build(from: filteredItems)
+            let anchors = monthAnchorBuilder.build(from: allItems)
 
-            viewState.timelineItems = filteredItems
+            viewState.timelineItems = allItems
             viewState.monthAnchors = anchors
             viewState.activeMonthAnchor = activeAnchor(for: anchors)
-            syncSelectedWeeklyLetter(with: filteredItems)
+            syncSelectedWeeklyLetter(with: allItems)
             viewState.errorMessage = nil
-            viewState.dataState = dataState(totalItems: allItems.count, filteredItems: filteredItems.count)
+            viewState.dataState = dataState(totalItems: allItems.count)
 
             if anchors.count < 2, viewState.monthScrubberState != .dragging {
                 cancelMonthScrubberFade()
@@ -374,7 +378,6 @@ extension TreasureStore {
 
     private func showMonthHintIfNeeded(with anchors: [TreasureMonthAnchor]) {
         guard
-            viewState.currentFilter == .allMemories,
             anchors.count >= 2,
             !monthHintStore.hasShownHint(),
             !viewState.hasLoadedInitialData
@@ -395,12 +398,9 @@ extension TreasureStore {
         }
     }
 
-    private func dataState(totalItems: Int, filteredItems: Int) -> TreasureDataState {
+    private func dataState(totalItems: Int) -> TreasureDataState {
         if totalItems == 0 {
             return .empty
-        }
-        if filteredItems == 0 {
-            return .ready
         }
         if totalItems <= 2 {
             return .lowContent
@@ -431,7 +431,7 @@ extension TreasureStore {
 
     private func closeCompose(removeDraftAssets: Bool) {
         if removeDraftAssets {
-            imageRemover(viewState.composeDraft.imageLocalPath)
+            imageRemover(viewState.composeDraft.imageLocalPaths)
         }
         viewState.composeDraft.reset()
         viewState.composeErrorMessage = nil
@@ -498,12 +498,6 @@ extension TreasureStore {
         monthHintTask = nil
     }
 
-    private func requestScrollToTop() {
-        if let firstID = viewState.timelineItems.first?.id {
-            requestScroll(to: firstID)
-        }
-    }
-
     private func requestScroll(to id: UUID) {
         viewState.scrollTargetID = nil
         viewState.scrollTargetID = id
@@ -557,11 +551,13 @@ extension TreasureStore {
     private func resetScrollTracking() {
         lastScrollOffset = nil
         lastScrollTimestamp = nil
-        upwardRecoveryDistance = 0
-        viewState.filterBarVisibility = .inlineVisible
         if viewState.scrollIntentState != .monthScrubbing {
             viewState.scrollIntentState = .idle
         }
+    }
+
+    private func normalizeImagePaths(_ paths: [String]) -> [String] {
+        paths.compactMap { $0.trimmed.nilIfEmpty }
     }
 }
 

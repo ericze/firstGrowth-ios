@@ -6,66 +6,51 @@ struct TreasureWeeklyLetterCard: View {
 
     var body: some View {
         Group {
-            if item.type == .weeklyLetterSilent {
-                silentCard
-            } else {
+            if item.canOpenWeeklyLetter {
                 Button(action: onTap) {
-                    expandableCard
+                    cardContent(showsExpandHint: true)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("打开这一周的信")
+            } else {
+                cardContent(showsExpandHint: false)
             }
         }
     }
 
-    private var silentCard: some View {
-        HStack(spacing: 12) {
-            Capsule()
-                .fill(AppTheme.Colors.accent.opacity(0.45))
-                .frame(width: 3)
-
-            Text(item.collapsedText ?? "")
-                .font(AppTheme.Typography.cardBody)
-                .foregroundStyle(AppTheme.Colors.secondaryText)
-                .lineSpacing(3)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .background(AppTheme.Colors.cardBackground.opacity(0.72))
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    }
-
-    private var expandableCard: some View {
+    private func cardContent(showsExpandHint: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("时光信笺")
-                    .font(AppTheme.Typography.meta)
-                    .foregroundStyle(AppTheme.Colors.secondaryText)
+                    .font(.system(size: 12, weight: .medium))
+                    .tracking(0.4)
+                    .foregroundStyle(TreasureTheme.textSecondary)
 
                 Spacer()
 
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(AppTheme.Colors.tertiaryText)
+                if showsExpandHint {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(TreasureTheme.textSecondary.opacity(0.65))
+                }
             }
 
             Text(item.collapsedText ?? "")
                 .font(.system(size: item.type == .weeklyLetterDense ? 18 : 17, weight: .medium))
-                .foregroundStyle(AppTheme.Colors.primaryText)
+                .foregroundStyle(TreasureTheme.textPrimary)
                 .multilineTextAlignment(.leading)
                 .lineSpacing(4)
 
             if let weekEnd = item.weekEnd {
                 Text(TreasureTimestampFormatter.shared.string(from: weekEnd, ageInDays: nil))
-                    .font(AppTheme.Typography.meta)
-                    .foregroundStyle(AppTheme.Colors.tertiaryText)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(TreasureTheme.textSecondary.opacity(0.7))
             }
         }
-        .padding(20)
-        .background(AppTheme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+        .padding(.horizontal, TreasureTheme.contentPadding)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(TreasureTheme.paperWhite)
+        .clipShape(TopRoundedCardShape(radius: TreasureTheme.cardRadius))
     }
 }

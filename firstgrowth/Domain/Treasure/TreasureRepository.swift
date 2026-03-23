@@ -19,13 +19,15 @@ nonisolated final class TreasureRepository {
 extension TreasureRepository {
     func createMemoryEntry(
         note: String?,
-        imageLocalPath: String?,
+        imageLocalPaths: [String],
         isMilestone: Bool,
         createdAt: Date,
         birthDate: Date
     ) throws -> MemoryEntry {
         let normalizedNote = note?.trimmed.nilIfEmpty
-        let normalizedImagePath = imageLocalPath?.trimmed.nilIfEmpty
+        let normalizedImagePaths = imageLocalPaths
+            .compactMap { $0.trimmed.nilIfEmpty }
+            .prefix(TreasureLimits.maxImagesPerEntry)
         let ageInDays = max(
             calendar.dateComponents(
                 [.day],
@@ -38,7 +40,8 @@ extension TreasureRepository {
         let entry = MemoryEntry(
             createdAt: createdAt,
             ageInDays: ageInDays,
-            imageLocalPath: normalizedImagePath,
+            imageLocalPaths: Array(normalizedImagePaths),
+            imageLocalPath: nil,
             note: normalizedNote,
             isMilestone: isMilestone
         )
@@ -81,7 +84,7 @@ extension TreasureRepository {
 
         guard let entry = try modelContext.fetch(descriptor).first else { return }
         if removeImage {
-            TreasurePhotoStorage.removeImage(at: entry.imageLocalPath)
+            TreasurePhotoStorage.removeImages(at: resolvedImageLocalPaths(for: entry))
         }
         modelContext.delete(entry)
         try modelContext.save()
@@ -141,6 +144,14 @@ extension TreasureRepository {
         )
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first
+    }
+
+    private func resolvedImageLocalPaths(for entry: MemoryEntry) -> [String] {
+        let normalizedPaths = entry.imageLocalPaths.compactMap { $0.trimmed.nilIfEmpty }
+        if !normalizedPaths.isEmpty {
+            return normalizedPaths
+        }
+        return [entry.imageLocalPath?.trimmed.nilIfEmpty].compactMap { $0 }
     }
 }
 
