@@ -1,10 +1,9 @@
+import Combine
 import Observation
 import SwiftUI
 
 struct SleepControlSheet: View {
     @Bindable var store: HomeStore
-
-    private let formatter = TimelineContentFormatter()
 
     var body: some View {
         BaseRecordSheet(title: "睡眠中", onClose: { store.handle(.dismissSheet) }) {
@@ -24,12 +23,12 @@ struct SleepControlSheet: View {
                                     .font(AppTheme.Typography.meta)
                                     .foregroundStyle(AppTheme.Colors.secondaryText)
 
-                                TimelineView(.periodic(from: .now, by: 60)) { context in
-                                    Text("已睡 \(formatter.formatSleepDuration(durationInSeconds: context.date.timeIntervalSince(session.startedAt)))")
-                                        .font(AppTheme.Typography.cardTitle)
-                                        .foregroundStyle(AppTheme.Colors.primaryText)
-                                        .contentTransition(.numericText())
-                                }
+                                LiveSleepDurationText(
+                                    startedAt: session.startedAt,
+                                    prefix: "已睡 ",
+                                    font: AppTheme.Typography.cardTitle,
+                                    color: AppTheme.Colors.primaryText
+                                )
                             }
                         }
 
@@ -39,12 +38,7 @@ struct SleepControlSheet: View {
                         HStack {
                             metaBlock(title: "开始时间", value: session.startedAt.formatted(date: .omitted, time: .shortened))
                             Spacer()
-                            TimelineView(.periodic(from: .now, by: 60)) { context in
-                                metaBlock(
-                                    title: "当前时长",
-                                    value: formatter.formatSleepDuration(durationInSeconds: context.date.timeIntervalSince(session.startedAt))
-                                )
-                            }
+                            LiveSleepDurationMetaBlock(startedAt: session.startedAt)
                         }
                     }
                     .padding(20)
@@ -68,6 +62,35 @@ struct SleepControlSheet: View {
             Text(value)
                 .font(AppTheme.Typography.cardTitle)
                 .foregroundStyle(AppTheme.Colors.primaryText)
+        }
+    }
+}
+
+private struct LiveSleepDurationMetaBlock: View {
+    let startedAt: Date
+
+    @State private var currentDate = Date()
+
+    private let formatter = TimelineContentFormatter()
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("当前时长")
+                .font(AppTheme.Typography.meta)
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+
+            Text(formatter.formatSleepDuration(durationInSeconds: currentDate.timeIntervalSince(startedAt)))
+                .font(AppTheme.Typography.cardTitle)
+                .foregroundStyle(AppTheme.Colors.primaryText)
+                .contentTransition(.numericText())
+                .monospacedDigit()
+        }
+        .onAppear {
+            currentDate = Date()
+        }
+        .onReceive(timer) { date in
+            currentDate = date
         }
     }
 }

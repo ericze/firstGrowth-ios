@@ -18,7 +18,7 @@ struct SleepActionButton: View {
                     .font(.system(size: 24, weight: .regular))
                     .foregroundStyle(isActive ? AppTheme.Colors.accent : AppTheme.Colors.primaryText)
 
-                Text(isActive ? "哄睡中" : "睡眠")
+                Text(isActive ? "睡眠中" : "睡眠")
                     .font(AppTheme.Typography.floatingLabel)
                     .foregroundStyle(isActive ? AppTheme.Colors.accent : AppTheme.Colors.primaryText)
                     .lineLimit(1)
@@ -44,7 +44,7 @@ struct SleepActionButton: View {
                     onLongPressEnd()
                 }
         )
-        .accessibilityLabel(isActive ? "哄睡中，长按结束" : "开始睡眠记录")
+        .accessibilityLabel(isActive ? "睡眠中，长按结束" : "开始睡眠记录")
         .accessibilityValue(isActive ? "进行中" : "未开始")
         .onDisappear {
             hintDismissTask?.cancel()

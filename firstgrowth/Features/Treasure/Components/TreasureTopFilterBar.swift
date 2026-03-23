@@ -5,35 +5,95 @@ struct TreasureTopFilterBar: View {
     let onSelect: (TreasureFilter) -> Void
 
     @Namespace private var selectionNamespace
+    private let itemSpacing: CGFloat = 24
+    private let labelSpacing: CGFloat = 4
+    private let indicatorSpacing: CGFloat = 6
+    private let touchInset: CGFloat = 10
+    private let labelFontSize: CGFloat = 13
+    private let iconFontSize: CGFloat = 12
+    private let indicatorSize: CGFloat = 4
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: itemSpacing) {
             ForEach(TreasureFilter.allCases) { filter in
                 Button {
                     onSelect(filter)
                 } label: {
-                    Text(filter.title)
-                        .font(.system(size: 15, weight: filter == selectedFilter ? .semibold : .medium))
-                        .foregroundStyle(filter == selectedFilter ? AppTheme.Colors.primaryText : AppTheme.Colors.secondaryText)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .contentShape(Rectangle())
-                        .background {
-                            if filter == selectedFilter {
-                                Capsule()
-                                    .fill(AppTheme.Colors.accent.opacity(0.24))
-                                    .matchedGeometryEffect(id: "treasure-filter", in: selectionNamespace)
+                    VStack(alignment: .leading, spacing: indicatorSpacing) {
+                        HStack(spacing: labelSpacing) {
+                            if let iconName = filter.iconName {
+                                Image(systemName: iconName)
+                                    .font(.system(size: iconFontSize, weight: .regular))
+                                    .foregroundStyle(iconColor(for: filter))
                             }
+
+                            Text(filter.displayTitle)
+                                .font(.system(size: labelFontSize, weight: fontWeight(for: filter)))
+                                .foregroundStyle(textColor(for: filter))
                         }
+
+                        indicator(for: filter)
+                    }
+                    .padding(.horizontal, touchInset)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 4)
                 .accessibilityLabel(filter.accessibilityLabel)
             }
         }
-        .padding(6)
-        .background(AppTheme.Colors.cardBackground.opacity(0.82))
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
-        .shadow(color: AppTheme.Shadow.color, radius: 8, y: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(AppTheme.stateAnimation, value: selectedFilter)
+    }
+
+    @ViewBuilder
+    private func indicator(for filter: TreasureFilter) -> some View {
+        Circle()
+            .fill(filter == selectedFilter ? AppTheme.Colors.sageGreen : .clear)
+            .frame(width: indicatorSize, height: indicatorSize)
+            .matchedGeometryEffect(
+                id: filter == selectedFilter ? "treasure-filter-indicator" : filter.id,
+                in: selectionNamespace
+            )
+    }
+
+    private func textColor(for filter: TreasureFilter) -> Color {
+        filter == selectedFilter
+            ? AppTheme.Colors.primaryText
+            : AppTheme.Colors.primaryText.opacity(0.4)
+    }
+
+    private func iconColor(for filter: TreasureFilter) -> Color {
+        filter == selectedFilter
+            ? AppTheme.Colors.sageGreen
+            : AppTheme.Colors.primaryText.opacity(0.4)
+    }
+
+    private func fontWeight(for filter: TreasureFilter) -> Font.Weight {
+        filter == selectedFilter ? .semibold : .regular
+    }
+}
+
+private extension TreasureFilter {
+    var displayTitle: String {
+        switch self {
+        case .allMemories:
+            "全部记忆"
+        case .starredMoments:
+            "星标时刻"
+        case .timeLetters:
+            "时光信笺"
+        }
+    }
+
+    var iconName: String? {
+        switch self {
+        case .allMemories:
+            nil
+        case .starredMoments:
+            "star.fill"
+        case .timeLetters:
+            "envelope.fill"
+        }
     }
 }

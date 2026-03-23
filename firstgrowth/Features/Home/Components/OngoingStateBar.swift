@@ -1,11 +1,10 @@
+import Combine
 import SwiftUI
 
 struct OngoingStateBar: View {
     let session: SleepSessionState
     let onTap: () -> Void
     let onEnd: () -> Void
-
-    private let formatter = TimelineContentFormatter()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -18,17 +17,17 @@ struct OngoingStateBar: View {
                         .background(AppTheme.Colors.accent.opacity(0.14))
                         .clipShape(Circle())
 
-                    TimelineView(.periodic(from: .now, by: 60)) { context in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("睡眠中")
-                                .font(AppTheme.Typography.meta)
-                                .foregroundStyle(AppTheme.Colors.secondaryText)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("睡眠中")
+                            .font(AppTheme.Typography.meta)
+                            .foregroundStyle(AppTheme.Colors.secondaryText)
 
-                            Text("已睡 \(formatter.formatSleepDuration(durationInSeconds: context.date.timeIntervalSince(session.startedAt)))")
-                                .font(AppTheme.Typography.cardTitle)
-                                .foregroundStyle(AppTheme.Colors.primaryText)
-                                .contentTransition(.numericText())
-                        }
+                        LiveSleepDurationText(
+                            startedAt: session.startedAt,
+                            prefix: "已睡 ",
+                            font: AppTheme.Typography.cardTitle,
+                            color: AppTheme.Colors.primaryText
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -51,5 +50,31 @@ struct OngoingStateBar: View {
         .background(AppTheme.Colors.floatingMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+    }
+}
+
+struct LiveSleepDurationText: View {
+    let startedAt: Date
+    let prefix: String
+    let font: Font
+    let color: Color
+
+    @State private var currentDate = Date()
+
+    private let formatter = TimelineContentFormatter()
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text("\(prefix)\(formatter.formatSleepDuration(durationInSeconds: currentDate.timeIntervalSince(startedAt)))")
+            .font(font)
+            .foregroundStyle(color)
+            .contentTransition(.numericText())
+            .monospacedDigit()
+            .onAppear {
+                currentDate = Date()
+            }
+            .onReceive(timer) { date in
+                currentDate = date
+            }
     }
 }

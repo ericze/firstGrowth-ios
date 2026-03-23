@@ -11,6 +11,7 @@ struct TreasureComposeModal: View {
     @State private var isShowingLibraryPicker = false
     @State private var isShowingCamera = false
     @State private var capturedImage: UIImage?
+    @FocusState private var isNoteFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,7 @@ struct TreasureComposeModal: View {
                     VStack(alignment: .leading, spacing: 24) {
                         TreasureComposePhotoSection(
                             imagePath: store.viewState.composeDraft.imageLocalPath,
+                            isInteractionEnabled: !isNoteFocused,
                             onTapAdd: { isShowingPhotoSourcePicker = true },
                             onRemove: { store.handle(.removeImage) }
                         )
@@ -32,7 +34,8 @@ struct TreasureComposeModal: View {
                             note: Binding(
                                 get: { store.viewState.composeDraft.note },
                                 set: { store.handle(.updateNote($0)) }
-                            )
+                            ),
+                            isFocused: $isNoteFocused
                         )
 
                         TreasureComposeMilestoneToggle(
@@ -42,6 +45,14 @@ struct TreasureComposeModal: View {
                     }
                     .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
                     .padding(.bottom, 36)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .background {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            dismissNoteFocus()
+                        }
                 }
             }
             .background(AppTheme.Colors.background.ignoresSafeArea())
@@ -111,6 +122,11 @@ struct TreasureComposeModal: View {
         .interactiveDismissDisabled(store.viewState.composeDraft.hasAnyUserIntent)
     }
 
+    private func dismissNoteFocus() {
+        guard isNoteFocused else { return }
+        isNoteFocused = false
+    }
+
     private var composeHeader: some View {
         HStack {
             Button("关闭") {
@@ -162,6 +178,7 @@ struct TreasureComposeModal: View {
 
 private struct TreasureComposePhotoSection: View {
     let imagePath: String?
+    let isInteractionEnabled: Bool
     let onTapAdd: () -> Void
     let onRemove: () -> Void
 
@@ -192,6 +209,8 @@ private struct TreasureComposePhotoSection: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("删除照片")
                 }
+                .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                .allowsHitTesting(isInteractionEnabled)
                 .onTapGesture(perform: onTapAdd)
             } else {
                 Button(action: onTapAdd) {
@@ -208,8 +227,10 @@ private struct TreasureComposePhotoSection: View {
                     .frame(height: 240)
                     .background(AppTheme.Colors.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .allowsHitTesting(isInteractionEnabled)
             }
         }
     }
@@ -217,6 +238,7 @@ private struct TreasureComposePhotoSection: View {
 
 private struct TreasureComposeNoteSection: View {
     @Binding var note: String
+    let isFocused: FocusState<Bool>.Binding
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -232,6 +254,7 @@ private struct TreasureComposeNoteSection: View {
                     .font(AppTheme.Typography.sheetBody)
                     .foregroundStyle(AppTheme.Colors.primaryText)
                     .scrollContentBackground(.hidden)
+                    .focused(isFocused)
                     .padding(18)
                     .frame(minHeight: 180)
 
