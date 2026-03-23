@@ -1,0 +1,572 @@
+import Foundation
+import Observation
+import SwiftData
+
+@MainActor
+@Observable
+final class TreasureStore {
+    var viewState = TreasureViewState()
+
+    @ObservationIgnored let headerConfig: HomeHeaderConfig
+
+    @ObservationIgnored private var repository: TreasureRepository?
+    @ObservationIgnored private let timelineBuilder: TreasureTimelineBuilder
+    @ObservationIgnored private let monthAnchorBuilder: TreasureMonthAnchorBuilder
+    @ObservationIgnored private let weeklyLetterComposer: WeeklyLetterComposer
+    @ObservationIgnored private let monthHintStore: TreasureMonthHintStore
+    @ObservationIgnored private let calendar: Calendar
+    @ObservationIgnored private let dateProvider: () -> Date
+    @ObservationIgnored private let imageRemover: @MainActor (String?) -> Void
+    @ObservationIgnored private var undoDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var monthScrubberFadeTask: Task<Void, Never>?
+    @ObservationIgnored private var monthHintTask: Task<Void, Never>?
+    @ObservationIgnored private var lastScrollOffset: CGFloat?
+    @ObservationIgnored private var lastScrollTimestamp: TimeInterval?
+    @ObservationIgnored private var upwardRecoveryDistance: CGFloat = 0
+
+    init(
+        headerConfig: HomeHeaderConfig,
+        repository: TreasureRepository? = nil,
+        timelineBuilder: TreasureTimelineBuilder? = nil,
+        monthAnchorBuilder: TreasureMonthAnchorBuilder? = nil,
+        weeklyLetterComposer: WeeklyLetterComposer? = nil,
+        monthHintStore: TreasureMonthHintStore? = nil,
+        calendar: Calendar = .current,
+        dateProvider: @escaping () -> Date = Date.init,
+        imageRemover: @escaping @MainActor (String?) -> Void = TreasurePhotoStorage.removeImage
+    ) {
+        var resolvedCalendar = calendar
+        resolvedCalendar.firstWeekday = 2
+        resolvedCalendar.minimumDaysInFirstWeek = 4
+
+        self.headerConfig = headerConfig
+        self.repository = repository
+        self.timelineBuilder = timelineBuilder ?? TreasureTimelineBuilder(calendar: resolvedCalendar)
+        self.monthAnchorBuilder = monthAnchorBuilder ?? TreasureMonthAnchorBuilder(calendar: resolvedCalendar)
+        self.weeklyLetterComposer = weeklyLetterComposer ?? WeeklyLetterComposer(calendar: resolvedCalendar)
+        self.monthHintStore = monthHintStore ?? TreasureMonthHintStore()
+        self.calendar = resolvedCalendar
+        self.dateProvider = dateProvider
+        self.imageRemover = imageRemover
+    }
+
+    deinit {
+        undoDismissTask?.cancel()
+        monthScrubberFadeTask?.cancel()
+        monthHintTask?.cancel()
+    }
+}
+
+extension TreasureStore {
+    var isComposeSaveEnabled: Bool {
+        viewState.composeDraft.canSave && viewState.composeState != .saving
+    }
+
+    var shouldShowDiscardConfirmation: Bool {
+        viewState.composeState == .confirmingDiscard
+    }
+
+    var shouldShowComposeFailure: Bool {
+        viewState.composeState == .failed
+    }
+
+    var composeFailureMessage: String {
+        viewState.composeErrorMessage ?? "没有保存成功，请再试一次。"
+    }
+
+    func configure(modelContext: ModelContext) {
+        guard repository == nil else { return }
+        repository = TreasureRepository(modelContext: modelContext, calendar: calendar)
+    }
+
+    func onAppear() {
+        handle(.onAppear)
+    }
+
+    func consumeScrollTarget() {
+        viewState.scrollTargetID = nil
+    }
+
+    func handle(_ action: TreasureAction) {
+        switch action {
+        case .onAppear:
+            guard !viewState.hasLoadedInitialData else { return }
+            resetScrollTracking()
+            refreshTimeline()
+            viewState.hasLoadedInitialData = true
+
+        case let .selectFilter(filter):
+            selectFilter(filter)
+
+        case let .didScroll(offset, timestamp):
+            updateScroll(offset: offset, timestamp: timestamp)
+
+        case .tapAddToday:
+            beginCompose()
+
+        case .dismissCompose:
+            requestComposeDismiss()
+
+        case .confirmDiscard:
+            discardComposeDraft()
+
+        case .cancelDiscard:
+            viewState.composeState = editingState(for: viewState.composeDraft)
+
+        case let .updateNote(note):
+            viewState.composeDraft.note = note
+            refreshComposeState()
+
+        case .toggleMilestone:
+            viewState.composeDraft.isMilestone.toggle()
+            refreshComposeState()
+            AppHaptics.selection()
+
+        case let .setImagePath(path):
+            setImagePath(path)
+
+        case .removeImage:
+            removeDraftImage()
+
+        case .saveCompose:
+            saveCompose()
+
+        case .retrySaveCompose:
+            saveCompose()
+
+        case .dismissComposeError:
+            viewState.composeErrorMessage = nil
+            viewState.composeState = editingState(for: viewState.composeDraft)
+
+        case .undoLastEntry:
+            undoLastEntry()
+
+        case .dismissUndo:
+            dismissUndoToast()
+
+        case let .tapWeeklyLetter(id):
+            openWeeklyLetter(id: id)
+
+        case .dismissWeeklyLetter:
+            closeWeeklyLetter()
+
+        case let .beginMonthScrubbing(height, locationY):
+            beginMonthScrubbing(height: height, locationY: locationY)
+
+        case let .updateMonthScrubbing(height, locationY):
+            updateMonthScrubbing(height: height, locationY: locationY)
+
+        case .endMonthScrubbing:
+            endMonthScrubbing()
+        }
+    }
+
+    private func selectFilter(_ filter: TreasureFilter) {
+        guard viewState.currentFilter != filter else { return }
+        viewState.currentFilter = filter
+        closeWeeklyLetter()
+        resetMonthScrubber()
+        resetScrollTracking()
+        refreshTimeline()
+        requestScrollToTop()
+        AppHaptics.selection()
+    }
+
+    private func updateScroll(offset: CGFloat, timestamp: TimeInterval) {
+        guard viewState.hasLoadedInitialData else { return }
+        defer {
+            lastScrollOffset = offset
+            lastScrollTimestamp = timestamp
+        }
+
+        guard viewState.monthScrubberState != .dragging else { return }
+
+        let previousOffset = lastScrollOffset ?? offset
+        let previousTimestamp = lastScrollTimestamp ?? timestamp
+        let delta = offset - previousOffset
+        let duration = max(timestamp - previousTimestamp, 0.001)
+        let velocity = abs(delta) / duration
+
+        if offset >= -24 {
+            upwardRecoveryDistance = 0
+            viewState.filterBarVisibility = .inlineVisible
+            if viewState.scrollIntentState != .monthScrubbing {
+                viewState.scrollIntentState = .idle
+            }
+        } else if delta < -0.5 {
+            upwardRecoveryDistance = 0
+            viewState.scrollIntentState = velocity > 1500 ? .fastScrolling : .readingDown
+            viewState.filterBarVisibility = .hiddenByScroll
+        } else if delta > 0.5 {
+            upwardRecoveryDistance += delta
+            viewState.scrollIntentState = .reversingUp
+            if offset < -60 && upwardRecoveryDistance >= 32 {
+                viewState.filterBarVisibility = .pinnedVisible
+            }
+        }
+
+        guard viewState.monthAnchors.count >= 2 else {
+            if viewState.monthScrubberState != .onboardingNudge {
+                viewState.monthScrubberState = .hidden
+            }
+            return
+        }
+
+        if velocity > 1500, offset < -60 {
+            showMonthScrubber()
+        }
+    }
+
+    private func beginCompose() {
+        viewState.composeDraft.reset()
+        viewState.composeErrorMessage = nil
+        viewState.composeState = .editingEmpty
+        AppHaptics.lightImpact()
+    }
+
+    private func requestComposeDismiss() {
+        if viewState.composeDraft.hasAnyUserIntent {
+            viewState.composeState = .confirmingDiscard
+        } else {
+            closeCompose(removeDraftAssets: false)
+        }
+    }
+
+    private func discardComposeDraft() {
+        closeCompose(removeDraftAssets: true)
+    }
+
+    private func setImagePath(_ path: String?) {
+        let normalizedPath = path?.trimmed.nilIfEmpty
+        if viewState.composeDraft.imageLocalPath != normalizedPath {
+            imageRemover(viewState.composeDraft.imageLocalPath)
+        }
+        viewState.composeDraft.imageLocalPath = normalizedPath
+        refreshComposeState()
+        if normalizedPath != nil {
+            AppHaptics.lightImpact()
+        }
+    }
+
+    private func removeDraftImage() {
+        imageRemover(viewState.composeDraft.imageLocalPath)
+        viewState.composeDraft.imageLocalPath = nil
+        refreshComposeState()
+    }
+
+    private func saveCompose() {
+        guard let repository, isComposeSaveEnabled else { return }
+
+        viewState.composeErrorMessage = nil
+        viewState.composeState = .saving
+
+        do {
+            let now = dateProvider()
+            let createdEntry = try repository.createMemoryEntry(
+                note: viewState.composeDraft.note,
+                imageLocalPath: viewState.composeDraft.imageLocalPath,
+                isMilestone: viewState.composeDraft.isMilestone,
+                createdAt: now,
+                birthDate: headerConfig.birthDate
+            )
+
+            syncWeeklyLetterIfPossible(for: createdEntry.createdAt)
+
+            viewState.composeDraft.reset()
+            viewState.composeState = .closed
+            refreshTimeline()
+            showUndoToast(recordID: createdEntry.id, message: "已留住今天")
+            AppHaptics.success()
+        } catch {
+            viewState.composeState = .failed
+            viewState.composeErrorMessage = "没有保存成功，请再试一次。"
+            assertionFailure("Treasure save failed: \(error)")
+        }
+    }
+
+    private func undoLastEntry() {
+        guard let repository, let undoToast = viewState.undoToast else { return }
+
+        do {
+            let memoryEntryDate = try repository.fetchMemoryEntry(id: undoToast.recordID)?.createdAt
+            try repository.deleteMemoryEntry(id: undoToast.recordID)
+            if let memoryEntryDate {
+                syncWeeklyLetterIfPossible(for: memoryEntryDate)
+            }
+            dismissUndoToast()
+            refreshTimeline()
+        } catch {
+            assertionFailure("Treasure undo failed: \(error)")
+        }
+    }
+
+    private func openWeeklyLetter(id: UUID) {
+        guard let item = viewState.timelineItems.first(where: { $0.id == id }), item.canOpenWeeklyLetter else { return }
+        viewState.selectedWeeklyLetter = item
+        viewState.weeklyLetterViewState = .expandedBottomSheet
+        AppHaptics.lightImpact()
+    }
+
+    private func closeWeeklyLetter() {
+        viewState.selectedWeeklyLetter = nil
+        viewState.weeklyLetterViewState = .collapsed
+    }
+
+    private func beginMonthScrubbing(height: CGFloat, locationY: CGFloat) {
+        guard viewState.monthAnchors.count >= 2 else { return }
+        cancelMonthScrubberFade()
+        viewState.monthScrubberState = .dragging
+        viewState.scrollIntentState = .monthScrubbing
+        updateMonthScrubbing(height: height, locationY: locationY)
+        AppHaptics.selection()
+    }
+
+    private func updateMonthScrubbing(height: CGFloat, locationY: CGFloat) {
+        guard let anchor = monthAnchor(for: height, locationY: locationY) else { return }
+        if viewState.activeMonthAnchor != anchor {
+            viewState.activeMonthAnchor = anchor
+            AppHaptics.selection()
+        }
+        requestScroll(to: anchor.firstTimelineItemID)
+    }
+
+    private func endMonthScrubbing() {
+        guard viewState.monthScrubberState == .dragging else { return }
+        viewState.monthScrubberState = .visible
+        viewState.scrollIntentState = .idle
+        scheduleMonthScrubberFade(after: 1.2)
+    }
+
+    private func refreshTimeline() {
+        guard let repository else {
+            viewState.dataState = .error
+            viewState.errorMessage = "珍藏内容暂不可用"
+            return
+        }
+
+        do {
+            let entries = try repository.fetchMemoryEntries()
+            let weeklyLetters = try repository.fetchWeeklyLetters()
+            let allItems = timelineBuilder.makeTimelineItems(entries: entries, weeklyLetters: weeklyLetters)
+            let filteredItems = timelineBuilder.filter(allItems, by: viewState.currentFilter)
+            let anchors = monthAnchorBuilder.build(from: filteredItems)
+
+            viewState.timelineItems = filteredItems
+            viewState.monthAnchors = anchors
+            viewState.activeMonthAnchor = activeAnchor(for: anchors)
+            syncSelectedWeeklyLetter(with: filteredItems)
+            viewState.errorMessage = nil
+            viewState.dataState = dataState(totalItems: allItems.count, filteredItems: filteredItems.count)
+
+            if anchors.count < 2, viewState.monthScrubberState != .dragging {
+                cancelMonthScrubberFade()
+                cancelMonthHintTask()
+                viewState.monthScrubberState = .hidden
+            }
+
+            showMonthHintIfNeeded(with: anchors)
+        } catch {
+            viewState.dataState = .error
+            viewState.errorMessage = "珍藏内容加载失败"
+            assertionFailure("Treasure refresh failed: \(error)")
+        }
+    }
+
+    private func showMonthHintIfNeeded(with anchors: [TreasureMonthAnchor]) {
+        guard
+            viewState.currentFilter == .allMemories,
+            anchors.count >= 2,
+            !monthHintStore.hasShownHint(),
+            !viewState.hasLoadedInitialData
+        else {
+            return
+        }
+
+        monthHintStore.markShown()
+        cancelMonthScrubberFade()
+        cancelMonthHintTask()
+        viewState.monthScrubberState = .onboardingNudge
+
+        monthHintTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled, self.viewState.monthScrubberState == .onboardingNudge else { return }
+            self.viewState.monthScrubberState = .hidden
+            self.monthHintTask = nil
+        }
+    }
+
+    private func dataState(totalItems: Int, filteredItems: Int) -> TreasureDataState {
+        if totalItems == 0 {
+            return .empty
+        }
+        if filteredItems == 0 {
+            return .ready
+        }
+        if totalItems <= 2 {
+            return .lowContent
+        }
+        return .ready
+    }
+
+    private func refreshComposeState() {
+        guard viewState.composeState != .saving, viewState.composeState != .failed else { return }
+        viewState.composeState = editingState(for: viewState.composeDraft)
+    }
+
+    private func editingState(for draft: TreasureComposeDraft) -> TreasureComposeState {
+        if draft.hasImage && draft.hasText {
+            return .editingPhotoAndText
+        }
+        if draft.hasImage {
+            return .editingPhotoOnly
+        }
+        if draft.hasText {
+            return .editingTextOnly
+        }
+        if draft.isMilestone {
+            return .editingMilestone
+        }
+        return .editingEmpty
+    }
+
+    private func closeCompose(removeDraftAssets: Bool) {
+        if removeDraftAssets {
+            imageRemover(viewState.composeDraft.imageLocalPath)
+        }
+        viewState.composeDraft.reset()
+        viewState.composeErrorMessage = nil
+        viewState.composeState = .closed
+    }
+
+    private func showUndoToast(recordID: UUID, message: String) {
+        undoDismissTask?.cancel()
+        viewState.undoToast = UndoToastState(recordID: recordID, message: message)
+
+        undoDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled else { return }
+            self.viewState.undoToast = nil
+            self.undoDismissTask = nil
+        }
+    }
+
+    private func dismissUndoToast() {
+        undoDismissTask?.cancel()
+        undoDismissTask = nil
+        viewState.undoToast = nil
+    }
+
+    private func showMonthScrubber() {
+        guard viewState.monthAnchors.count >= 2 else { return }
+        cancelMonthScrubberFade()
+        if viewState.monthScrubberState != .dragging {
+            viewState.monthScrubberState = .visible
+        }
+        if viewState.activeMonthAnchor == nil {
+            viewState.activeMonthAnchor = viewState.monthAnchors.first
+        }
+        scheduleMonthScrubberFade(after: 1.2)
+    }
+
+    private func resetMonthScrubber() {
+        cancelMonthScrubberFade()
+        cancelMonthHintTask()
+        viewState.monthScrubberState = .hidden
+        viewState.activeMonthAnchor = viewState.monthAnchors.first
+    }
+
+    private func scheduleMonthScrubberFade(after delay: TimeInterval) {
+        monthScrubberFadeTask?.cancel()
+        monthScrubberFadeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled, self.viewState.monthScrubberState == .visible else { return }
+            self.viewState.monthScrubberState = .fading
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            self.viewState.monthScrubberState = .hidden
+            self.monthScrubberFadeTask = nil
+        }
+    }
+
+    private func cancelMonthScrubberFade() {
+        monthScrubberFadeTask?.cancel()
+        monthScrubberFadeTask = nil
+    }
+
+    private func cancelMonthHintTask() {
+        monthHintTask?.cancel()
+        monthHintTask = nil
+    }
+
+    private func requestScrollToTop() {
+        if let firstID = viewState.timelineItems.first?.id {
+            requestScroll(to: firstID)
+        }
+    }
+
+    private func requestScroll(to id: UUID) {
+        viewState.scrollTargetID = nil
+        viewState.scrollTargetID = id
+    }
+
+    private func activeAnchor(for anchors: [TreasureMonthAnchor]) -> TreasureMonthAnchor? {
+        if let currentAnchor = viewState.activeMonthAnchor,
+           let matched = anchors.first(where: { $0.id == currentAnchor.id }) {
+            return matched
+        }
+        return anchors.first
+    }
+
+    private func syncSelectedWeeklyLetter(with items: [TreasureTimelineItem]) {
+        guard let selectedWeeklyLetter = viewState.selectedWeeklyLetter else { return }
+
+        if let refreshedItem = items.first(where: { $0.id == selectedWeeklyLetter.id && $0.canOpenWeeklyLetter }) {
+            viewState.selectedWeeklyLetter = refreshedItem
+        } else {
+            closeWeeklyLetter()
+        }
+    }
+
+    private func monthAnchor(for height: CGFloat, locationY: CGFloat) -> TreasureMonthAnchor? {
+        guard !viewState.monthAnchors.isEmpty else { return nil }
+        let clampedProgress = min(max(locationY / max(height, 1), 0), 0.999)
+        let index = min(Int(clampedProgress * CGFloat(viewState.monthAnchors.count)), viewState.monthAnchors.count - 1)
+        return viewState.monthAnchors[index]
+    }
+
+    private func weekStart(for date: Date) -> Date {
+        let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+        let start = calendar.date(from: components) ?? date
+        return calendar.startOfDay(for: start)
+    }
+
+    private func syncWeeklyLetterIfPossible(for date: Date) {
+        guard let repository else { return }
+
+        do {
+            try repository.syncWeeklyLetter(
+                for: weekStart(for: date),
+                composer: weeklyLetterComposer,
+                generatedAt: dateProvider()
+            )
+        } catch {
+            assertionFailure("Treasure weekly letter sync failed: \(error)")
+        }
+    }
+
+    private func resetScrollTracking() {
+        lastScrollOffset = nil
+        lastScrollTimestamp = nil
+        upwardRecoveryDistance = 0
+        viewState.filterBarVisibility = .inlineVisible
+        if viewState.scrollIntentState != .monthScrubbing {
+            viewState.scrollIntentState = .idle
+        }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
