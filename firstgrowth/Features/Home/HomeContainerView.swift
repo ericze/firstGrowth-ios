@@ -155,7 +155,7 @@ struct HomeContainerView: View {
                 .presentationBackground(AppTheme.Colors.background)
         case .diaper:
             DiaperRecordSheet(store: store)
-                .presentationDetents([.height(360)])
+                .presentationDetents([.height(392)])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(AppTheme.Colors.background)
         case .food:

@@ -5,7 +5,7 @@ struct MilkLoggingSheet: View {
     @Bindable var store: HomeStore
 
     var body: some View {
-        BaseRecordSheet(title: "喂奶", onClose: { store.handle(.dismissSheet) }) {
+        BaseRecordSheet(title: store.milkDraft.selectedTab.title, onClose: { store.handle(.dismissSheet) }) {
             VStack(spacing: 24) {
                 MilkTabSwitcher(selectedTab: store.milkDraft.selectedTab) { tab in
                     store.handle(.selectMilkTab(tab))

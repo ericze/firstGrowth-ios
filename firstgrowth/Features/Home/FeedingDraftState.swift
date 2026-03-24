@@ -9,6 +9,15 @@ enum MilkTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .nursing:
+            "亲喂"
+        case .bottle:
+            "瓶喂"
+        }
+    }
+
+    var detailTitle: String {
+        switch self {
+        case .nursing:
             "亲喂计时"
         case .bottle:
             "瓶喂记录"

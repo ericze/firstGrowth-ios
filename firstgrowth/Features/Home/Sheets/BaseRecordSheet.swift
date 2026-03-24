@@ -30,7 +30,7 @@ struct BaseRecordSheet<Content: View, Footer: View>: View {
             }
         }
         .padding(.horizontal, 24)
-        .padding(.top, 18)
+        .padding(.top, 24)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(AppTheme.Colors.background)

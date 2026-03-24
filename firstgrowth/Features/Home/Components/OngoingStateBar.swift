@@ -1,4 +1,3 @@
-import Combine
 import SwiftUI
 
 struct OngoingStateBar: View {
@@ -59,22 +58,19 @@ struct LiveSleepDurationText: View {
     let font: Font
     let color: Color
 
-    @State private var currentDate = Date()
-
     private let formatter = TimelineContentFormatter()
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Text("\(prefix)\(formatter.formatSleepDuration(durationInSeconds: currentDate.timeIntervalSince(startedAt)))")
-            .font(font)
-            .foregroundStyle(color)
-            .contentTransition(.numericText())
-            .monospacedDigit()
-            .onAppear {
-                currentDate = Date()
-            }
-            .onReceive(timer) { date in
-                currentDate = date
-            }
+        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            Text("\(prefix)\(formattedDuration(at: context.date))")
+                .font(font)
+                .foregroundStyle(color)
+                .contentTransition(.numericText())
+                .monospacedDigit()
+        }
+    }
+
+    private func formattedDuration(at date: Date) -> String {
+        formatter.formatSleepDuration(durationInSeconds: max(0, date.timeIntervalSince(startedAt)))
     }
 }

@@ -1,4 +1,3 @@
-import Combine
 import Observation
 import SwiftUI
 
@@ -69,28 +68,25 @@ struct SleepControlSheet: View {
 private struct LiveSleepDurationMetaBlock: View {
     let startedAt: Date
 
-    @State private var currentDate = Date()
-
     private let formatter = TimelineContentFormatter()
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("当前时长")
-                .font(AppTheme.Typography.meta)
-                .foregroundStyle(AppTheme.Colors.secondaryText)
+        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                Text("当前时长")
+                    .font(AppTheme.Typography.meta)
+                    .foregroundStyle(AppTheme.Colors.secondaryText)
 
-            Text(formatter.formatSleepDuration(durationInSeconds: currentDate.timeIntervalSince(startedAt)))
-                .font(AppTheme.Typography.cardTitle)
-                .foregroundStyle(AppTheme.Colors.primaryText)
-                .contentTransition(.numericText())
-                .monospacedDigit()
+                Text(formattedDuration(at: context.date))
+                    .font(AppTheme.Typography.cardTitle)
+                    .foregroundStyle(AppTheme.Colors.primaryText)
+                    .contentTransition(.numericText())
+                    .monospacedDigit()
+            }
         }
-        .onAppear {
-            currentDate = Date()
-        }
-        .onReceive(timer) { date in
-            currentDate = date
-        }
+    }
+
+    private func formattedDuration(at date: Date) -> String {
+        formatter.formatSleepDuration(durationInSeconds: max(0, date.timeIntervalSince(startedAt)))
     }
 }

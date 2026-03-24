@@ -10,7 +10,7 @@ struct MilkTabSwitcher: View {
                 Button {
                     onSelect(tab)
                 } label: {
-                    Text(tab.title)
+                    Text(tab.detailTitle)
                         .font(tab == selectedTab ? AppTheme.Typography.navSelected : AppTheme.Typography.nav)
                         .foregroundStyle(
                             tab == selectedTab
