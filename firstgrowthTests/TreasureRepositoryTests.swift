@@ -34,8 +34,11 @@ final class TreasureRepositoryTests: XCTestCase {
             birthDate: HomeHeaderConfig.placeholder.birthDate
         )
 
-        XCTAssertEqual(entry.imageLocalPaths, Array(imagePaths.prefix(TreasureLimits.maxImagesPerEntry)))
-        XCTAssertNil(entry.imageLocalPath)
+        let expectedPaths = Array(imagePaths.prefix(TreasureLimits.maxImagesPerEntry))
+        XCTAssertEqual(entry.imageLocalPaths, expectedPaths)
+
+        let fetchedEntries = try environment.treasureRepository.fetchMemoryEntries()
+        XCTAssertEqual(fetchedEntries.first?.imageLocalPaths, expectedPaths)
     }
 
     func testSyncWeeklyLetterUpsertsAndRemovesAffectedWeek() throws {

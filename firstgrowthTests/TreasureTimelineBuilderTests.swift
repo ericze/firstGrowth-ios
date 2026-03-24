@@ -12,8 +12,8 @@ final class TreasureTimelineBuilderTests: XCTestCase {
         let weekEnd = newer.addingTimeInterval(3_600)
 
         let entries = [
-            MemoryEntry(createdAt: older, ageInDays: 30, imageLocalPath: nil, note: "较早的一条。", isMilestone: false),
-            MemoryEntry(createdAt: newer, ageInDays: 31, imageLocalPath: nil, note: "更新的一条。", isMilestone: true),
+            MemoryEntry(createdAt: older, ageInDays: 30, imageLocalPaths: [], note: "较早的一条。", isMilestone: false),
+            MemoryEntry(createdAt: newer, ageInDays: 31, imageLocalPaths: [], note: "更新的一条。", isMilestone: true),
         ]
         let letters = [
             WeeklyLetter(
@@ -32,13 +32,13 @@ final class TreasureTimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items.first?.monthKey, "2024-03")
     }
 
-    func testFallsBackToLegacySingleImagePathWhenArrayIsEmpty() throws {
+    func testBuildsMemoryItemForSingleImageEntry() throws {
         let builder = TreasureTimelineBuilder(calendar: calendar)
         let now = Date(timeIntervalSince1970: 1_710_000_000)
-        let legacyImagePath = try makeTemporaryImagePath()
+        let imagePath = try makeTemporaryImagePath()
 
         defer {
-            try? FileManager.default.removeItem(atPath: legacyImagePath)
+            try? FileManager.default.removeItem(atPath: imagePath)
         }
 
         let items = builder.makeTimelineItems(
@@ -46,8 +46,7 @@ final class TreasureTimelineBuilderTests: XCTestCase {
                 MemoryEntry(
                     createdAt: now,
                     ageInDays: 20,
-                    imageLocalPaths: [],
-                    imageLocalPath: legacyImagePath,
+                    imageLocalPaths: [imagePath],
                     note: nil,
                     isMilestone: false
                 )
@@ -56,15 +55,43 @@ final class TreasureTimelineBuilderTests: XCTestCase {
         )
 
         XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items.first?.imageLocalPaths, [legacyImagePath])
+        XCTAssertEqual(items.first?.imageLocalPaths, [imagePath])
+    }
+
+    func testBuildsMemoryItemForMultiImageEntry() throws {
+        let builder = TreasureTimelineBuilder(calendar: calendar)
+        let now = Date(timeIntervalSince1970: 1_710_000_000)
+        let firstImagePath = try makeTemporaryImagePath()
+        let secondImagePath = try makeTemporaryImagePath()
+
+        defer {
+            try? FileManager.default.removeItem(atPath: firstImagePath)
+            try? FileManager.default.removeItem(atPath: secondImagePath)
+        }
+
+        let items = builder.makeTimelineItems(
+            entries: [
+                MemoryEntry(
+                    createdAt: now,
+                    ageInDays: 20,
+                    imageLocalPaths: [firstImagePath, secondImagePath],
+                    note: nil,
+                    isMilestone: false
+                )
+            ],
+            weeklyLetters: []
+        )
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.imageLocalPaths, [firstImagePath, secondImagePath])
     }
 
     func testDropsUnreadableImageWithoutTextAndKeepsTextFallback() {
         let builder = TreasureTimelineBuilder(calendar: calendar, fileManager: .default)
         let now = Date(timeIntervalSince1970: 1_710_000_000)
         let entries = [
-            MemoryEntry(createdAt: now, ageInDays: 20, imageLocalPath: "/tmp/not-found-a.jpg", note: nil, isMilestone: false),
-            MemoryEntry(createdAt: now.addingTimeInterval(-10), ageInDays: 20, imageLocalPath: "/tmp/not-found-b.jpg", note: "还有一句话。", isMilestone: false),
+            MemoryEntry(createdAt: now, ageInDays: 20, imageLocalPaths: ["/tmp/not-found-a.jpg"], note: nil, isMilestone: false),
+            MemoryEntry(createdAt: now.addingTimeInterval(-10), ageInDays: 20, imageLocalPaths: ["/tmp/not-found-b.jpg"], note: "还有一句话。", isMilestone: false),
         ]
 
         let items = builder.makeTimelineItems(entries: entries, weeklyLetters: [])
@@ -111,7 +138,7 @@ final class TreasureTimelineBuilderTests: XCTestCase {
                 MemoryEntry(
                     createdAt: sameDayMorning,
                     ageInDays: 20,
-                    imageLocalPath: nil,
+                    imageLocalPaths: [],
                     note: "上午记下的一条。",
                     isMilestone: false
                 )

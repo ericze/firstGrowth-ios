@@ -136,11 +136,7 @@ struct WeeklyLetterComposer {
     }
 
     private func normalizedImageCount(for entry: MemoryEntry) -> Int {
-        let multiImageCount = entry.imageLocalPaths.compactMap { $0.trimmed.nilIfEmpty }.count
-        if multiImageCount > 0 {
-            return multiImageCount
-        }
-        return entry.imageLocalPath?.trimmed.nilIfEmpty == nil ? 0 : 1
+        entry.imageLocalPaths.count
     }
 }
 

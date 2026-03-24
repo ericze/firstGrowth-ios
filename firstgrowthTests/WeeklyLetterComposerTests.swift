@@ -12,7 +12,7 @@ final class WeeklyLetterComposerTests: XCTestCase {
         let entry = MemoryEntry(
             createdAt: weekStart,
             ageInDays: 40,
-            imageLocalPath: nil,
+            imageLocalPaths: [],
             note: "今天笑了一下。",
             isMilestone: false
         )
@@ -34,8 +34,8 @@ final class WeeklyLetterComposerTests: XCTestCase {
         let weekStart = Date(timeIntervalSince1970: 1_710_000_000)
         let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart)!
         let entries = [
-            MemoryEntry(createdAt: weekStart, ageInDays: 38, imageLocalPath: nil, note: "第一次翻身。", isMilestone: true),
-            MemoryEntry(createdAt: weekStart.addingTimeInterval(2_000), ageInDays: 38, imageLocalPath: nil, note: "晚上睡得稳一些。", isMilestone: false),
+            MemoryEntry(createdAt: weekStart, ageInDays: 38, imageLocalPaths: [], note: "第一次翻身。", isMilestone: true),
+            MemoryEntry(createdAt: weekStart.addingTimeInterval(2_000), ageInDays: 38, imageLocalPaths: [], note: "晚上睡得稳一些。", isMilestone: false),
         ]
 
         let letter = composer.compose(
@@ -57,7 +57,7 @@ final class WeeklyLetterComposerTests: XCTestCase {
             MemoryEntry(
                 createdAt: weekStart.addingTimeInterval(TimeInterval(index * 600)),
                 ageInDays: 60,
-                imageLocalPath: nil,
+                imageLocalPaths: [],
                 note: index == 0 ? "今天很健康。" : "第\(index)条记忆。",
                 isMilestone: false
             )

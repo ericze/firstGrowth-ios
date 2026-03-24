@@ -41,7 +41,6 @@ extension TreasureRepository {
             createdAt: createdAt,
             ageInDays: ageInDays,
             imageLocalPaths: Array(normalizedImagePaths),
-            imageLocalPath: nil,
             note: normalizedNote,
             isMilestone: isMilestone
         )
@@ -147,11 +146,7 @@ extension TreasureRepository {
     }
 
     private func resolvedImageLocalPaths(for entry: MemoryEntry) -> [String] {
-        let normalizedPaths = entry.imageLocalPaths.compactMap { $0.trimmed.nilIfEmpty }
-        if !normalizedPaths.isEmpty {
-            return normalizedPaths
-        }
-        return [entry.imageLocalPath?.trimmed.nilIfEmpty].compactMap { $0 }
+        entry.imageLocalPaths
     }
 }
 

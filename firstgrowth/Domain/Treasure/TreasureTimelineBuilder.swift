@@ -94,11 +94,7 @@ struct TreasureTimelineBuilder {
     }
 
     private func normalizedImageLocalPaths(for entry: MemoryEntry) -> [String] {
-        let normalizedPaths = entry.imageLocalPaths.compactMap { $0.trimmed.nilIfEmpty }
-        if !normalizedPaths.isEmpty {
-            return normalizedPaths
-        }
-        return [entry.imageLocalPath?.trimmed.nilIfEmpty].compactMap { $0 }
+        entry.imageLocalPaths
     }
 }
 

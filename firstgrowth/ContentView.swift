@@ -221,7 +221,7 @@ private enum TreasureSeedPreset: String {
             return MemoryEntry(
                 createdAt: createdAt,
                 ageInDays: ageInDays,
-                imageLocalPath: nil,
+                imageLocalPaths: [],
                 note: note,
                 isMilestone: isMilestone
             )
