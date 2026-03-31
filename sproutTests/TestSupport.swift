@@ -12,6 +12,10 @@ struct TestEnvironment {
     let now: MutableNow
     let defaults: UserDefaults
     let localizationService: LocalizationService
+
+    func makeBabyRepository() -> BabyRepository {
+        BabyRepository(modelContext: modelContext)
+    }
 }
 
 @MainActor
