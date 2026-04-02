@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "sprout";
+"NSCameraUsageDescription" = "Used to take photos for records.";
+"NSPhotoLibraryUsageDescription" = "Used to choose photos from your library for records.";

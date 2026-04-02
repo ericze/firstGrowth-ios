@@ -48,11 +48,16 @@ struct AppShellView: View {
                 AppTheme.Colors.background
                     .ignoresSafeArea()
 
-                sidebarOverlay(drawerWidth: drawerWidth)
                 mainContent(
                     drawerWidth: drawerWidth,
                     topInset: proxy.safeAreaInsets.top
                 )
+
+                if isSidebarVisible {
+                    contentDismissOverlay(drawerWidth: drawerWidth)
+                }
+
+                sidebarOverlay(drawerWidth: drawerWidth)
             }
             .onChange(of: selectedTab) { _, _ in
                 guard isSidebarVisible else { return }
@@ -119,18 +124,19 @@ struct AppShellView: View {
             x: 10,
             y: 0
         )
-        .overlay {
-            if isSidebarVisible {
-                Color.black
-                    .opacity(mainContentMaskOpacity)
-                    .contentShape(Rectangle())
-                    .allowsHitTesting(isContentDismissOverlayVisible)
-                    .onTapGesture {
-                        closeSidebar(drawerWidth: drawerWidth)
-                    }
-                    .gesture(dismissGesture(drawerWidth: drawerWidth))
+    }
+
+    private func contentDismissOverlay(drawerWidth: CGFloat) -> some View {
+        Color.black
+            .opacity(mainContentMaskOpacity)
+            .ignoresSafeArea()
+            .padding(.leading, mainContentOffset(drawerWidth: drawerWidth))
+            .contentShape(Rectangle())
+            .allowsHitTesting(isContentDismissOverlayVisible)
+            .onTapGesture {
+                closeSidebar(drawerWidth: drawerWidth)
             }
-        }
+            .gesture(dismissGesture(drawerWidth: drawerWidth))
     }
 
     private func sidebarOverlay(drawerWidth: CGFloat) -> some View {

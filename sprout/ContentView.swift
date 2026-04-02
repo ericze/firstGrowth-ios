@@ -11,7 +11,10 @@ struct ContentView: View {
     private let launchOverrides = AppLaunchOverrides.current
 
     var body: some View {
-        Group {
+        ZStack {
+            AppTheme.Colors.background
+                .ignoresSafeArea()
+
             if let babyRepository {
                 AppShellView(
                     babyRepository: babyRepository,
@@ -22,29 +25,41 @@ struct ContentView: View {
                 )
             }
         }
-            .background(AppTheme.Colors.background.ignoresSafeArea())
-            .task {
-                guard !hasBootstrapped else { return }
-                hasBootstrapped = true
-                let repo = BabyRepository(modelContext: modelContext)
-                babyRepository = repo
-                launchOverrides.applyIfNeeded(modelContext: modelContext, headerConfig: .placeholder)
-                store.configure(modelContext: modelContext)
-                growthStore.configure(modelContext: modelContext)
-                treasureStore.configure(modelContext: modelContext)
-                store.onAppear()
-                growthStore.onAppear()
-                treasureStore.onAppear()
-                if let initialGrowthMetric = launchOverrides.initialGrowthMetric {
-                    growthStore.handle(.selectMetric(initialGrowthMetric))
-                }
-                if launchOverrides.opensGrowthEntry {
-                    growthStore.handle(.tapEntry)
-                    if launchOverrides.growthEntryMode == .manual {
-                        growthStore.handle(.switchToManualInput)
-                    }
+        .task {
+            guard !hasBootstrapped else { return }
+            hasBootstrapped = true
+
+            let repo = BabyRepository(modelContext: modelContext)
+            repo.createDefaultIfNeeded()
+
+            let headerConfig = HomeHeaderConfig.from(repo.activeBaby)
+            launchOverrides.applyIfNeeded(modelContext: modelContext, headerConfig: headerConfig)
+
+            store.configure(modelContext: modelContext)
+            growthStore.configure(modelContext: modelContext)
+            treasureStore.configure(modelContext: modelContext)
+
+            store.updateHeaderConfig(headerConfig)
+            growthStore.updateHeaderConfig(headerConfig)
+            treasureStore.updateHeaderConfig(headerConfig)
+
+            store.onAppear()
+            growthStore.onAppear()
+            treasureStore.onAppear()
+
+            if let initialGrowthMetric = launchOverrides.initialGrowthMetric {
+                growthStore.handle(.selectMetric(initialGrowthMetric))
+            }
+
+            if launchOverrides.opensGrowthEntry {
+                growthStore.handle(.tapEntry)
+                if launchOverrides.growthEntryMode == .manual {
+                    growthStore.handle(.switchToManualInput)
                 }
             }
+
+            babyRepository = repo
+        }
     }
 }
 

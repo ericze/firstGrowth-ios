@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "初长";
+"NSCameraUsageDescription" = "用于拍摄记录照片。";
+"NSPhotoLibraryUsageDescription" = "用于从相册选择记录照片。";
