@@ -202,7 +202,10 @@ struct AppShellView: View {
     }
 
     private func drawerOffset(drawerWidth: CGFloat) -> CGFloat {
-        -drawerWidth * 0.12 * (1 - sidebarProgress)
+        gesturePolicy.drawerOffset(
+            drawerWidth: drawerWidth,
+            progress: sidebarProgress
+        )
     }
 
     private func mainContentOffset(drawerWidth: CGFloat) -> CGFloat {

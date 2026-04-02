@@ -41,8 +41,6 @@ struct RecordRootView: View {
                 guard isRevealEligible else {
                     return
                 }
-                guard gesturePolicy.isPredominantlyHorizontal(value.translation) else { return }
-
                 onRevealSidebarEnded(value)
             }
     }

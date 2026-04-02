@@ -3,8 +3,8 @@ import CoreGraphics
 struct SidebarGesturePolicy {
     static let revealThreshold: CGFloat = 56
     static let dismissThreshold: CGFloat = 50
-    static let revealSettleProgress: CGFloat = 0.32
-    static let dismissSettleProgress: CGFloat = 0.78
+    static let revealSettleProgress: CGFloat = 0.2
+    static let dismissSettleProgress: CGFloat = 0.72
 
     enum SettleState: Equatable {
         case open
@@ -97,6 +97,12 @@ struct SidebarGesturePolicy {
     func progress(forVisibleWidth visibleWidth: CGFloat, drawerWidth: CGFloat) -> CGFloat {
         guard drawerWidth > 0 else { return 0 }
         return clampedVisibleWidth(visibleWidth, drawerWidth: drawerWidth) / drawerWidth
+    }
+
+    func drawerOffset(drawerWidth: CGFloat, progress: CGFloat) -> CGFloat {
+        guard drawerWidth > 0 else { return 0 }
+        let clampedProgress = min(max(progress, 0), 1)
+        return -drawerWidth * (1 - clampedProgress)
     }
 
     private func projectedTranslationWidth(
