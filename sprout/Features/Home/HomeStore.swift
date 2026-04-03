@@ -16,6 +16,7 @@ final class HomeStore {
     @ObservationIgnored private var recordRepository: RecordRepository?
     @ObservationIgnored private let formatter: TimelineContentFormatter
     @ObservationIgnored private let localizationService: LocalizationService
+    @ObservationIgnored private let localeFormatter: LocaleFormatter
     @ObservationIgnored private let sleepSessionRepository: SleepSessionRepository
     @ObservationIgnored private let foodTagCatalog: FoodTagCatalog
     @ObservationIgnored private let calendar: Calendar
@@ -37,6 +38,11 @@ final class HomeStore {
         self.recordRepository = recordRepository
         self.localizationService = localizationService
         self.formatter = formatter ?? TimelineContentFormatter(localizationService: localizationService)
+        self.localeFormatter = LocaleFormatter(
+            locale: localizationService.locale,
+            calendar: calendar,
+            localizationService: localizationService
+        )
         self.foodTagCatalog = FoodTagCatalog(language: localizationService.language)
         self.sleepSessionRepository = sleepSessionRepository
         self.calendar = calendar
@@ -59,6 +65,26 @@ extension HomeStore {
 
     var suggestedFoodTags: [String] {
         foodTagCatalog.commonTags.filter { !recentFoodTags.contains($0) }
+    }
+
+    var customFoodTags: [String] {
+        foodDraft.selectedTags.filter { tag in
+            !containsFoodTag(tag, in: recentFoodTags) &&
+                !containsFoodTag(tag, in: foodTagCatalog.commonTags)
+        }
+    }
+
+    var allSuggestedFoodTags: [String] {
+        uniqueFoodTags(from: recentFoodTags + foodTagCatalog.allKnownTags)
+    }
+
+    var foodFirstTasteHint: FoodFirstTasteHint? {
+        guard !viewState.firstTasteFoodTags.isEmpty else { return nil }
+
+        return FoodFirstTasteHint(
+            tags: viewState.firstTasteFoodTags,
+            message: makeFirstTasteHintMessage(tags: viewState.firstTasteFoodTags)
+        )
     }
 
     var isFoodSaveEnabled: Bool {
@@ -99,6 +125,8 @@ extension HomeStore {
             restoreOngoingSleep()
             reloadTimeline()
             refreshRecentFoodTags()
+            refreshKnownFoodTags()
+            updateFirstTasteFoodTags()
             viewState.hasLoadedInitialData = true
         case .tapMilkEntry:
             milkDraft.reset()
@@ -154,7 +182,40 @@ extension HomeStore {
         } else {
             foodDraft.selectedTags.append(tag)
         }
+        updateFirstTasteFoodTags()
         AppHaptics.selection()
+    }
+
+    @discardableResult
+    func addFoodTag(_ rawTag: String) -> Bool {
+        let normalizedTag = rawTag.trimmed
+        guard !normalizedTag.isEmpty else { return false }
+
+        let canonicalTag = canonicalFoodTag(matching: normalizedTag)
+        guard !containsFoodTag(canonicalTag, in: foodDraft.selectedTags) else {
+            return true
+        }
+
+        foodDraft.selectedTags.append(canonicalTag)
+        updateFirstTasteFoodTags()
+        AppHaptics.selection()
+        return true
+    }
+
+    func foodTagSuggestions(for rawQuery: String, limit: Int = 6) -> [String] {
+        let query = rawQuery.trimmed
+        guard !query.isEmpty else { return [] }
+
+        return uniqueFoodTags(
+            from: (recentFoodTags + foodTagCatalog.allKnownTags).filter { tag in
+                matchesFoodTagSearch(tag, query: query)
+            }
+        )
+            .filter { tag in
+                !containsFoodTag(tag, in: foodDraft.selectedTags)
+            }
+            .prefix(limit)
+            .map { $0 }
     }
 
     func updateFoodNote(_ note: String) {
@@ -299,7 +360,7 @@ extension HomeStore {
 
         do {
             let record = try recordRepository.createFoodRecord(
-                tags: foodDraft.selectedTags,
+                tags: uniqueFoodTags(from: foodDraft.selectedTags),
                 note: foodDraft.note,
                 imageURL: foodDraft.selectedImagePath,
                 at: dateProvider()
@@ -334,6 +395,7 @@ extension HomeStore {
 
         reloadTimeline()
         refreshRecentFoodTags()
+        refreshKnownFoodTags()
         showUndoToast(recordID: record.id, message: message)
     }
 
@@ -377,9 +439,27 @@ extension HomeStore {
         guard let recordRepository else { return }
 
         do {
-            viewState.recentFoodTags = try recordRepository.fetchRecentFoodTags()
+            viewState.recentFoodTags = uniqueFoodTags(from: try recordRepository.fetchRecentFoodTags())
         } catch {
             assertionFailure("Refresh recent food tags failed: \(error)")
+        }
+    }
+
+    private func refreshKnownFoodTags() {
+        guard let recordRepository else { return }
+
+        do {
+            let records = try recordRepository.fetchAllRecords()
+            let tags = records
+                .filter { $0.recordType == .food }
+                .flatMap { $0.tags ?? [] }
+                .map { foodTagCatalog.canonicalTag(for: $0) }
+                .filter { !$0.isEmpty }
+
+            viewState.knownFoodTags = uniqueFoodTags(from: tags)
+            updateFirstTasteFoodTags()
+        } catch {
+            assertionFailure("Refresh known food tags failed: \(error)")
         }
     }
 
@@ -417,6 +497,7 @@ extension HomeStore {
             FoodPhotoStorage.removeImage(at: foodDraft.selectedImagePath)
         }
         foodDraft = FoodDraftState()
+        viewState.firstTasteFoodTags = []
     }
 
     private func showUndoToast(recordID: UUID, message: String) {
@@ -434,5 +515,79 @@ extension HomeStore {
         undoDismissTask?.cancel()
         undoDismissTask = nil
         viewState.undoToast = nil
+    }
+
+    private func canonicalFoodTag(matching tag: String) -> String {
+        let canonicalTag = foodTagCatalog.canonicalTag(for: tag)
+        guard !canonicalTag.isEmpty else { return "" }
+
+        for candidate in foodDraft.selectedTags + allSuggestedFoodTags
+        where foodTagsMatch(candidate, tag) {
+            return candidate
+        }
+
+        return canonicalTag
+    }
+
+    private func containsFoodTag(_ tag: String, in tags: [String]) -> Bool {
+        tags.contains { foodTagsMatch($0, tag) }
+    }
+
+    private func foodTagsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        foodTagCatalog.isEquivalentTag(lhs, rhs)
+    }
+
+    private func matchesFoodTagSearch(_ candidate: String, query: String) -> Bool {
+        candidate.range(
+            of: query,
+            options: [.caseInsensitive, .diacriticInsensitive],
+            range: nil,
+            locale: localizationService.locale
+        ) != nil
+    }
+
+    private func uniqueFoodTags(from tags: [String]) -> [String] {
+        var uniqueTags: [String] = []
+
+        for tag in tags {
+            let canonicalTag = foodTagCatalog.canonicalTag(for: tag)
+            guard !canonicalTag.isEmpty else { continue }
+            guard !containsFoodTag(canonicalTag, in: uniqueTags) else { continue }
+            uniqueTags.append(canonicalTag)
+        }
+
+        return uniqueTags
+    }
+
+    private func updateFirstTasteFoodTags() {
+        let selectedTags = foodDraft.selectedTags
+            .map(\.trimmed)
+            .filter { !$0.isEmpty }
+
+        viewState.firstTasteFoodTags = selectedTags.filter { tag in
+            !containsFoodTag(tag, in: viewState.knownFoodTags)
+        }
+    }
+
+    private func makeFirstTasteHintMessage(tags: [String]) -> String {
+        if tags.count == 1, let tag = tags.first {
+            return L10n.format(
+                "home.sheet.food.first_taste.single",
+                service: localizationService,
+                locale: localizationService.locale,
+                en: "First time trying %@",
+                zh: "第一次尝试%@",
+                arguments: [tag]
+            )
+        }
+
+        return L10n.format(
+            "home.sheet.food.first_taste.multiple",
+            service: localizationService,
+            locale: localizationService.locale,
+            en: "First time trying: %@",
+            zh: "第一次尝试：%@",
+            arguments: [localeFormatter.list(tags)]
+        )
     }
 }

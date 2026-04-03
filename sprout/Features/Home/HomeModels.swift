@@ -38,6 +38,8 @@ struct HomeViewState {
     var ongoingSleep: SleepSessionState?
     var undoToast: UndoToastState?
     var recentFoodTags: [String] = []
+    var knownFoodTags: [String] = []
+    var firstTasteFoodTags: [String] = []
     var isLoadingHistory = false
     var hasLoadedInitialData = false
     var hasMoreHistory = true
@@ -45,6 +47,11 @@ struct HomeViewState {
     var timelineItems: [TimelineDisplayItem] {
         todayDisplayItems + historyDisplayItems
     }
+}
+
+struct FoodFirstTasteHint: Equatable {
+    let tags: [String]
+    let message: String
 }
 
 struct FoodDraftState {

@@ -6,6 +6,7 @@ import UIKit
 struct FoodRecordSheet: View {
     @Bindable var store: HomeStore
 
+    @State private var customTagText = ""
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isShowingPhotoSourcePicker = false
     @State private var isShowingLibraryPicker = false
@@ -18,6 +19,30 @@ struct FoodRecordSheet: View {
         BaseRecordSheet(title: String(localized: "home.sheet.food.title"), onClose: { store.requestFoodDismiss() }) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
+                    FoodTagComposerSection(
+                        text: $customTagText,
+                        customTags: store.customFoodTags,
+                        suggestions: store.foodTagSuggestions(for: customTagText),
+                        columns: tagColumns,
+                        onAdd: addCustomTag,
+                        onSelectSuggestion: addSuggestedTag,
+                        onRemove: store.toggleFoodTag
+                    )
+
+                    if let firstTasteHint = store.foodFirstTasteHint {
+                        FoodFirstTasteHintCard(hint: firstTasteHint)
+                    }
+
+                    if !store.foodDraft.selectedTags.isEmpty {
+                        FoodTagSection(
+                            title: L10n.text("home.sheet.food.selected.title", en: "Selected", zh: "已选食材"),
+                            tags: store.foodDraft.selectedTags,
+                            selectedTags: store.foodDraft.selectedTags,
+                            columns: tagColumns,
+                            onToggle: store.toggleFoodTag
+                        )
+                    }
+
                     if !store.recentFoodTags.isEmpty {
                         FoodTagSection(
                             title: String(localized: "home.sheet.food.recent"),
@@ -118,41 +143,38 @@ struct FoodRecordSheet: View {
             assertionFailure("Photo library import failed: \(error)")
         }
     }
+
+    private func addCustomTag() {
+        guard store.addFoodTag(customTagText) else { return }
+        customTagText = ""
+    }
+
+    private func addSuggestedTag(_ tag: String) {
+        guard store.addFoodTag(tag) else { return }
+        customTagText = ""
+    }
 }
 
-private struct FoodTagSection: View {
-    let title: String
-    let tags: [String]
-    let selectedTags: [String]
-    let columns: [GridItem]
-    let onToggle: (String) -> Void
+private struct FoodFirstTasteHintCard: View {
+    let hint: FoodFirstTasteHint
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "leaf")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(AppTheme.Colors.accent)
+                .padding(.top, 2)
+
+            Text(hint.message)
                 .font(AppTheme.Typography.meta)
                 .foregroundStyle(AppTheme.Colors.secondaryText)
-
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-                ForEach(tags, id: \.self) { tag in
-                    let isSelected = selectedTags.contains(tag)
-
-                    Button {
-                        onToggle(tag)
-                    } label: {
-                        Text(tag)
-                            .font(AppTheme.Typography.meta)
-                            .foregroundStyle(isSelected ? Color.white : AppTheme.Colors.primaryText)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity)
-                            .background(isSelected ? AppTheme.Colors.accent : AppTheme.Colors.cardBackground)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.Colors.cardBackground.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
     }
 }
 
