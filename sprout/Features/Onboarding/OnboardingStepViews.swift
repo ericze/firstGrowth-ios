@@ -91,8 +91,8 @@ struct OnboardingPermissionsStep: View {
 
     private var transitionStyle: AnyTransition {
         .asymmetric(
-            insertion: .opacity.combined(with: .move(edge: .bottom)),
-            removal: .opacity.combined(with: .move(edge: .top))
+            insertion: .opacity.combined(with: .offset(y: 10)),
+            removal: .opacity.combined(with: .offset(y: -10))
         )
     }
 
