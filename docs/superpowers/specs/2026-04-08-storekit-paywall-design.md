@@ -55,14 +55,34 @@ enum Entitlement: String, CaseIterable {
 
 ### SubscriptionManager
 
-A `@MainActor @Observable` singleton that owns subscription state and provides entitlement checks.
+A `@MainActor @Observable` class that owns subscription state and provides entitlement checks. Uses constructor injection with protocol-based dependencies for testability.
 
 ```swift
+// Protocol abstracting StoreKit APIs for testability
+protocol ProductProvider: Sendable {
+    func products(for ids: [String]) async throws -> [StoreKit.Product]
+    func currentEntitlements() async -> StoreKit.Transaction.AsynchronousSequence
+    func listenForTransactions() -> StoreKit.Transaction.AsynchronousSequence
+}
+
+// Default implementation using real StoreKit
+struct StoreKitProvider: ProductProvider { ... }
+
 @MainActor @Observable
 final class SubscriptionManager {
+    private let provider: ProductProvider
+    private let cache: SubscriptionCache
+    private var transactionListenerTask: Task<Void, Never>?
+
     var subscriptionStatus: SubscriptionStatus = .loading
     var products: [StoreKit.Product] = []
     var isLoading: Bool = false
+
+    init(provider: ProductProvider = StoreKitProvider(),
+         cache: SubscriptionCache = UserDefaultsSubscriptionCache()) {
+        self.provider = provider
+        self.cache = cache
+    }
 
     var isPro: Bool { subscriptionStatus.isActive }
     func isEntitled(_ entitlement: Entitlement) -> Bool
@@ -70,15 +90,16 @@ final class SubscriptionManager {
     func loadProducts() async
     func purchase(_ product: StoreKit.Product) async throws -> StoreKit.Transaction?
     func restorePurchases() async
-    func listenForTransactions() async  // Transaction.updates stream
+    func startListening()  // Starts transactionListenerTask (runs for app lifetime, never cancelled)
 }
 ```
 
 **Lifecycle:**
-1. Created once in `ContentView`, injected via `@Environment`
-2. `loadProducts()` called on init to fetch product metadata
-3. `listenForTransactions()` starts a long-running `Task` observing `Transaction.updates`
-4. `subscriptionStatus` drives all UI reactivity
+1. Created once in `ContentView` with default `StoreKitProvider`; tests inject a mock provider
+2. Injected via `@Environment` throughout the view hierarchy
+3. `loadProducts()` called on init to fetch product metadata
+4. `startListening()` starts a long-running `Task` observing `Transaction.updates` — this Task lives for the entire app lifecycle and is never cancelled (expected for a singleton-scoped manager)
+5. `subscriptionStatus` drives all UI reactivity
 
 ### SubscriptionStatus
 
@@ -106,8 +127,29 @@ enum SubscriptionStatus: Equatable {
 
 ### Caching
 
-- On each successful status update, cache `subscriptionStatus` + `expirationDate` to a dedicated `UserDefaults` suite (`com.firstgrowth.sprout.subscription`)
-- On app launch, if StoreKit is unavailable, restore from cache to avoid blocking UI
+Cache uses a dedicated `UserDefaults` suite (`com.firstgrowth.sprout.subscription`). The `SubscriptionCache` protocol abstracts this for testing.
+
+**Cached fields (flat representation):**
+- `subscription_product_id: String?` — product ID of active subscription
+- `subscription_expiration: Date?` — expiration date
+- `subscription_is_active: Bool` — whether subscription was active when cached
+
+```swift
+protocol SubscriptionCache {
+    var cachedProductID: String? { get set }
+    var cachedExpiration: Date? { get set }
+    var cachedIsActive: Bool { get set }
+    func clear()
+}
+
+struct UserDefaultsSubscriptionCache: SubscriptionCache {
+    private let defaults = UserDefaults(suiteName: "com.firstgrowth.sprout.subscription")!
+    // ... property accessors mapping to the keys above
+}
+```
+
+- On each successful status update, write the flat fields
+- On app launch, if StoreKit is unavailable, reconstruct status from cached fields
 - Cache is informational only — StoreKit is always the source of truth when available
 
 ### Error Handling
@@ -154,6 +196,26 @@ Replaces the existing `PaywallSheet` stub. Full-screen modal presentation.
 | In-feature intercept | Tap Pro-gated feature | Show Paywall as sheet |
 | Post-onboarding | After onboarding completes | Optional Pro recommendation (future) |
 
+## Paywall Presentation
+
+The Paywall is presented as a sheet. `AppShellView` owns the sheet state:
+
+```swift
+// AppShellView
+@Environment(SubscriptionManager.self) private var subscriptionManager
+@State private var showPaywall = false
+
+// .sheet(isPresented: $showPaywall) { PaywallView(subscriptionManager: subscriptionManager) }
+```
+
+**Trigger flow from Sidebar:**
+1. `SidebarMenuView` detects Pro item tap
+2. Calls `onProFeatureTap: () -> Void` callback (new parameter)
+3. `SidebarDrawer` forwards to `AppShellView` via another callback
+4. `AppShellView` sets `showPaywall = true`
+
+The existing `onNavigate` callback is unchanged for normal (non-Pro) navigation. The new `onProFeatureTap` callback is the sole mechanism for Paywall triggers from the sidebar. This keeps `SidebarMenuView` free of `SubscriptionManager` knowledge.
+
 ## Sidebar Integration
 
 ### New Routes
@@ -166,13 +228,17 @@ case familyGroup     // Pro
 
 ### SidebarIndexItem Extension
 
+The existing `SidebarIndexItem.id` is `String` type. We keep `String` as the ID type for `Identifiable` conformance and add the `isPro` field:
+
 ```swift
+// Migration: id remains String, add isPro field
 struct SidebarIndexItem: Identifiable {
-    let id: SidebarRoute
+    let id: String              // unchanged — uses SidebarRoute.rawValue
     let title: String
-    let icon: String        // SF Symbol name
+    let icon: String            // SF Symbol name
     let detail: String
-    let isPro: Bool         // NEW: requires Pro entitlement
+    let route: SidebarRoute     // navigation target
+    let isPro: Bool             // NEW: requires Pro entitlement
 }
 ```
 
@@ -186,14 +252,25 @@ struct SidebarIndexItem: Identifiable {
 
 ### Tap Handling
 
+`SidebarMenuView` receives both `onNavigate: (SidebarRoute) -> Void` (existing) and `onProFeatureTap: () -> Void` (new) callbacks. It does NOT hold a reference to `SubscriptionManager`.
+
 ```swift
+// In SidebarMenuView
 func handleIndexItemTap(_ item: SidebarIndexItem) {
-    if item.isPro && !subscriptionManager.isPro {
-        // Show paywall
-        routeState.activeSheet = .paywall
+    if item.isPro {
+        onProFeatureTap()  // AppShellView will check subscription & show paywall or navigate
     } else {
-        // Navigate to feature page
-        navigationPath.append(item.id)
+        onNavigate(item.route)
+    }
+}
+
+// In AppShellView (receives the callback chain)
+func handleProFeatureTap() {
+    if subscriptionManager.isPro {
+        // Navigate to the Pro feature (last tapped Pro route)
+        sidebarNavigationPath.append(lastProRoute)
+    } else {
+        showPaywall = true
     }
 }
 ```
@@ -202,10 +279,29 @@ Pro items display a lock icon (`lock.fill`, `AppTheme.Colors.secondaryText`) on 
 
 ### Destination Views (Placeholders)
 
-- `CloudSyncView` — placeholder with "Coming soon" for Phase 2
-- `FamilyGroupView` — placeholder with "Coming soon" for Phase 3
+- `CloudSyncPlaceholderView` — placeholder with "Coming soon" for Phase 2
+- `FamilyGroupPlaceholderView` — placeholder with "Coming soon" for Phase 3
 
 These exist so navigation works end-to-end for subscribed users. They'll be filled in later phases.
+
+**SidebarDrawer `navigationDestination` update:**
+```swift
+// In SidebarDrawer, add to existing navigationDestination switch:
+.navigationDestination(for: SidebarRoute.self) { route in
+    switch route {
+    case .babyProfile:
+        BabyProfileView(...)
+    case .language:
+        LanguageRegionView()
+    case .cloudSync:           // NEW
+        CloudSyncPlaceholderView()
+    case .familyGroup:         // NEW
+        FamilyGroupPlaceholderView()
+    }
+}
+```
+
+For subscribed users, tapping a Pro sidebar item navigates normally to the placeholder. For non-subscribers, the Paywall intercepts before navigation (see Tap Handling above).
 
 ## New L10n Keys
 
@@ -228,9 +324,17 @@ All new user-facing strings require en + zh:
 | `paywall.yearly.badge` | Save 40% | 省 40% |
 | `paywall.error.title` | Unable to process | 无法处理 |
 | `paywall.restore.empty` | No purchases found | 未找到购买记录 |
+| `paywall.loading` | Loading... | 加载中... |
+| `paywall.plan.monthly` | Monthly | 月付 |
+| `paywall.plan.yearly` | Yearly | 年付 |
+| `paywall.success.message` | Welcome to Sprout Pro! | 欢迎使用初长 Pro！ |
+| `paywall.terms` | Terms of Service | 服务条款 |
+| `paywall.privacy` | Privacy Policy | 隐私政策 |
+| `paywall.coming_soon.title` | Coming Soon | 即将上线 |
+| `paywall.coming_soon.detail` | This feature is under development | 功能开发中，敬请期待 |
 | `sidebar.pro.badge` | Pro | Pro |
 
-The existing stale keys (`shell.paywall.*`, `shell.sidebar.family.*`, `shell.sidebar.cloud.*`) will be cleaned up and replaced by these new keys.
+The existing stale keys `shell.sidebar.cloud.title/detail` and `shell.sidebar.family.title/detail` will be **reused** (their extractionState changed from "stale" to "extracted_with_value") rather than replaced, since the content matches. The stale `shell.paywall.*` keys will be removed and replaced by the new `paywall.*` keys above.
 
 ## File Structure
 
@@ -241,7 +345,9 @@ sprout/Domain/Subscription/
 ├── SubscriptionManager.swift      // Subscription state + StoreKit interaction
 ├── SubscriptionStatus.swift       // Status enum
 ├── Entitlement.swift              // Entitlement enum
-└── ProductID.swift                // StoreKit product ID constants
+├── ProductID.swift                // StoreKit product ID constants
+├── ProductProvider.swift          // Protocol + StoreKitProvider (real impl)
+└── SubscriptionCache.swift        // Protocol + UserDefaultsSubscriptionCache
 
 sprout/Features/Shell/
 ├── PaywallView.swift              // Full paywall (replaces PaywallSheet.swift)
@@ -253,33 +359,47 @@ sprout/Shared/
 └── ProBadgeView.swift             // Lock icon / "Pro" badge shared component
 
 sproutTests/
-└── SubscriptionManagerTests.swift // Unit tests
+├── SubscriptionManagerTests.swift // Unit tests with MockProductProvider
+├── MockProductProvider.swift      // Mock for StoreKit APIs
+└── MockSubscriptionCache.swift    // Mock for cache layer
 ```
 
 ### Modified Files
 
 | File | Change |
 |------|--------|
-| `PaywallSheet.swift` | **Delete** — replaced by `PaywallView` |
-| `SidebarMenuView.swift` | Add Pro menu items + lock icons + tap handling |
-| `SidebarDrawer.swift` | Add `.cloudSync` / `.familyGroup` routes + destinations |
-| `SidebarMenuView.swift` (SidebarIndexItem) | Add `isPro` field |
-| `AppShellView.swift` | Add Paywall sheet presentation |
-| `ContentView.swift` | Create + inject `SubscriptionManager` |
-| `Localizable.xcstrings` | Add new L10n keys, clean up stale keys |
+| `PaywallSheet.swift` | **Delete** — replaced by `PaywallView` (no other files reference this stub) |
+| `SidebarMenuView.swift` | Add Pro menu items + lock icons + `onProFeatureTap` callback; extend `SidebarIndexItem` with `isPro: Bool` + `route: SidebarRoute` fields |
+| `SidebarDrawer.swift` | Add `.cloudSync` / `.familyGroup` routes + `navigationDestination` cases for placeholder views; forward `onProFeatureTap` |
+| `AppShellView.swift` | Add `@State showPaywall` + `.sheet` for PaywallView; receive `onProFeatureTap` callback chain; subscription check logic |
+| `ContentView.swift` | Create `SubscriptionManager` (with default `StoreKitProvider`) + inject via `@Environment` |
+| `Localizable.xcstrings` | Add new L10n keys, clean up stale `shell.paywall.*` / `shell.sidebar.family.*` / `shell.sidebar.cloud.*` keys |
+
+**Note:** `SubscriptionManager` is created in `ContentView` (not `SproutApp`) for Phase 1. If Pro status is needed during onboarding in a future phase, the creation point would move up to `SproutApp`.
 
 ## Testing
 
 ### Unit Tests (`SubscriptionManagerTests`)
 
-Testable without StoreKit by mocking transaction state:
+All tests inject a `MockProductProvider` and `MockSubscriptionCache` to avoid StoreKit dependency:
 
+**SubscriptionManager logic tests:**
 - `test_notSubscribed_isPro_returnsFalse`
 - `test_subscribed_isPro_returnsTrue`
 - `test_subscribed_isEntitled_returnsTrue`
 - `test_expired_isPro_returnsFalse`
 - `test_loadingState_initialValue`
 - `test_cachedStatus_restoredOnStartup`
+- `test_cacheUpdatedOnStatusChange`
+
+**Paywall logic tests:**
+- `test_productSelection_switchesPlan`
+- `test_subscribeButton_disabledWhenLoading`
+
+**Sidebar Pro item tests:**
+- `test_proItems_showLockIcon`
+- `test_proItemTap_notSubscribed_triggersPaywall`
+- `test_proItemTap_subscribed_navigates`
 
 ### StoreKit Testing
 
