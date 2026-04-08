@@ -6,10 +6,10 @@ struct TreasureMonthAnchorBuilder {
 
     init(
         calendar: Calendar = .current,
-        localizationService: LocalizationService = .current
+        localizationService: LocalizationService? = nil
     ) {
         self.calendar = calendar
-        self.localizationService = localizationService
+        self.localizationService = localizationService ?? .current
     }
 
     func build(from items: [TreasureTimelineItem]) -> [TreasureMonthAnchor] {

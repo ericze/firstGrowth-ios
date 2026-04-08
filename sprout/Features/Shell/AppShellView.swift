@@ -148,10 +148,7 @@ struct AppShellView: View {
                 headerConfig: activeBabyState.headerConfig,
                 babyRepository: babyRepository,
                 isNavigationAtRoot: $isNavigationAtRoot,
-                isSidebarOpen: $showSidebar,
-                onHeaderTap: {
-                    AppHaptics.selection()
-                }
+                isSidebarOpen: $showSidebar
             )
                 .frame(width: drawerWidth, alignment: .topLeading)
                 .frame(maxHeight: .infinity, alignment: .topLeading)

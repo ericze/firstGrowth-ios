@@ -13,7 +13,7 @@ struct TreasureMonthScrubber: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 10) {
             if state == .onboardingNudge {
-                Text("拖动这里穿梭时间")
+                Text(L10n.text("treasure.scrubber.hint", en: "Drag here to browse time", zh: "拖动这里穿梭时间"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(TreasureTheme.textPrimary)
                     .padding(.horizontal, 12)
@@ -74,7 +74,7 @@ struct TreasureMonthScrubber: View {
             }
             .frame(width: 118, height: 176)
         }
-        .accessibilityLabel("穿梭时间")
+        .accessibilityLabel(L10n.text("treasure.scrubber.accessibility", en: "Browse time", zh: "穿梭时间"))
         .opacity(state == .fading ? 0 : 1)
         .rootPagerGestureExclusion()
     }

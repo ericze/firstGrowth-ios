@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 import SwiftData
 
 @MainActor
@@ -21,12 +22,13 @@ final class GrowthStore {
     @ObservationIgnored private let dateProvider: () -> Date
     @ObservationIgnored private var precisionFadeTask: Task<Void, Never>?
     @ObservationIgnored private var undoDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var messageDismissTask: Task<Void, Never>?
 
     init(
         headerConfig: HomeHeaderConfig,
         repository: GrowthRecordRepository? = nil,
         formatter: GrowthFormatter? = nil,
-        localizationService: LocalizationService = .current,
+        localizationService: LocalizationService? = nil,
         textRenderer: GrowthTextRenderer? = nil,
         referenceRangeStore: GrowthReferenceRangeStore = GrowthReferenceRangeStore(),
         metricPreferenceStore: GrowthMetricPreferenceStore = GrowthMetricPreferenceStore(),
@@ -35,11 +37,12 @@ final class GrowthStore {
         calendar: Calendar = .current,
         dateProvider: @escaping () -> Date = Date.init
     ) {
+        let resolvedLocalizationService = localizationService ?? .current
         self.headerConfig = headerConfig
         self.repository = repository
-        self.localizationService = localizationService
+        self.localizationService = resolvedLocalizationService
         self.formatter = formatter ?? GrowthFormatter(calendar: calendar)
-        self.textRenderer = textRenderer ?? GrowthTextRenderer(localizationService: localizationService)
+        self.textRenderer = textRenderer ?? GrowthTextRenderer(localizationService: resolvedLocalizationService)
         self.referenceRangeStore = referenceRangeStore
         self.metricPreferenceStore = metricPreferenceStore
         self.chartInteractionController = chartInteractionController
@@ -51,6 +54,7 @@ final class GrowthStore {
     deinit {
         precisionFadeTask?.cancel()
         undoDismissTask?.cancel()
+        messageDismissTask?.cancel()
     }
 }
 extension GrowthStore {
@@ -131,6 +135,9 @@ extension GrowthStore {
         case .dismissUndo:
             dismissUndoToast()
 
+        case .dismissMessage:
+            dismissMessageToast()
+
         case let .beginScrubbing(locationX, plotWidth):
             beginScrubbing(at: locationX, plotWidth: plotWidth)
 
@@ -190,7 +197,7 @@ extension GrowthStore {
         } catch {
             viewState.dataState = .error
             viewState.errorMessage = textRenderer.loadFailedMessage()
-            assertionFailure("Growth refresh failed: \(error)")
+            logPersistenceError(error, message: "Growth refresh failed")
         }
     }
 
@@ -209,7 +216,7 @@ extension GrowthStore {
         do {
             return try repository.fetchLatestRecord(for: metric)?.value
         } catch {
-            assertionFailure("Fetch latest growth record failed: \(error)")
+            logPersistenceError(error, message: "Fetch latest growth record failed")
             return nil
         }
     }
@@ -239,7 +246,15 @@ extension GrowthStore {
             showUndoToast(recordID: record.id, message: textRenderer.undoMessage(value: value, metric: metric))
             AppHaptics.success()
         } catch {
-            assertionFailure("Growth save failed: \(error)")
+            logPersistenceError(error, message: "Growth save failed")
+            showMessageToast(
+                L10n.text(
+                    "growth.error.save",
+                    service: localizationService,
+                    en: "Couldn't save this growth record. Try again.",
+                    zh: "这次成长记录没有保存成功，请再试一次。"
+                )
+            )
         }
     }
 
@@ -251,7 +266,15 @@ extension GrowthStore {
             dismissUndoToast()
             refreshCurrentMetric()
         } catch {
-            assertionFailure("Growth undo failed: \(error)")
+            logPersistenceError(error, message: "Growth undo failed")
+            showMessageToast(
+                L10n.text(
+                    "growth.error.undo",
+                    service: localizationService,
+                    en: "Couldn't undo that growth record. Try again.",
+                    zh: "这次撤销成长记录没有成功，请再试一次。"
+                )
+            )
         }
     }
 
@@ -394,5 +417,30 @@ extension GrowthStore {
         undoDismissTask?.cancel()
         undoDismissTask = nil
         viewState.undoToast = nil
+    }
+
+    private func showMessageToast(_ message: String) {
+        guard viewState.messageToast?.message != message else { return }
+
+        messageDismissTask?.cancel()
+        viewState.messageToast = MessageToastState(message: message)
+
+        messageDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled else { return }
+            self.viewState.messageToast = nil
+            self.messageDismissTask = nil
+        }
+    }
+
+    private func dismissMessageToast() {
+        messageDismissTask?.cancel()
+        messageDismissTask = nil
+        viewState.messageToast = nil
+    }
+
+    private func logPersistenceError(_ error: Error, message: String) {
+        let errorDescription = String(describing: error)
+        AppLogger.persistence.error("\(message, privacy: .public): \(errorDescription, privacy: .public)")
     }
 }

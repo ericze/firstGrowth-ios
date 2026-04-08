@@ -77,6 +77,9 @@ struct SheetHeader: View {
             Text(title)
                 .font(AppTheme.Typography.sheetTitle)
                 .foregroundStyle(AppTheme.Colors.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .layoutPriority(1)
 
             Spacer()
 

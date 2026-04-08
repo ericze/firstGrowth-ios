@@ -1,7 +1,9 @@
 import Foundation
+import os
 import SwiftData
 
 nonisolated final class TreasureRepository {
+    private static let logger = Logger(subsystem: "sprout", category: "TreasureRepository")
     private let modelContext: ModelContext
     private let calendar: Calendar
 
@@ -82,11 +84,16 @@ extension TreasureRepository {
         descriptor.fetchLimit = 1
 
         guard let entry = try modelContext.fetch(descriptor).first else { return }
-        if removeImage {
-            TreasurePhotoStorage.removeImages(at: resolvedImageLocalPaths(for: entry))
-        }
+        let imagePaths = removeImage ? resolvedImageLocalPaths(for: entry) : []
         modelContext.delete(entry)
         try modelContext.save()
+
+        guard removeImage else { return }
+
+        let failedPaths = TreasurePhotoStorage.removeImages(at: imagePaths)
+        if !failedPaths.isEmpty {
+            Self.logger.error("Memory entry deleted but failed cleaning \(failedPaths.count, privacy: .public) image file(s)")
+        }
     }
 
     func syncWeeklyLetter(

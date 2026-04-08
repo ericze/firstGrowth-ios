@@ -97,8 +97,8 @@ struct WeeklyLetterComposer {
     ) -> String {
         let firstNoteSnippet = entries
             .compactMap { $0.note?.trimmed.nilIfEmpty }
-            .first?
-            .prefix(18) ?? ""
+            .first
+            .map { String($0.prefix(18)) } ?? ""
 
         switch language {
         case .english:

@@ -59,7 +59,7 @@ struct LanguageRegionView: View {
                     language: .english
                 )
                 languageChip(
-                    label: "\u{4e2d}\u{6587}",
+                    label: "中文",
                     language: .simplifiedChinese
                 )
             }

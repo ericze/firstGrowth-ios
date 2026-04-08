@@ -7,12 +7,15 @@ struct BabyProfileView: View {
     @State private var name: String = ""
     @State private var birthDate: Date = .now
     @State private var gender: BabyProfile.Gender?
+    @State private var saveErrorMessage: String?
+    @State private var errorDismissTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: AppTheme.Spacing.section) {
                 avatarSection
                 formSection
+                saveFeedback
             }
             .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
             .padding(.top, 24)
@@ -36,6 +39,10 @@ struct BabyProfileView: View {
         }
         .onAppear {
             loadFromRepository()
+        }
+        .onDisappear {
+            errorDismissTask?.cancel()
+            errorDismissTask = nil
         }
     }
 
@@ -86,7 +93,10 @@ struct BabyProfileView: View {
                 .onChange(of: name) {
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return }
-                    babyRepository.updateName(trimmed)
+                    guard babyRepository.updateName(trimmed) else {
+                        showSaveError()
+                        return
+                    }
                 }
         }
         .padding(.vertical, 16)
@@ -107,7 +117,10 @@ struct BabyProfileView: View {
             .font(AppTheme.Typography.sheetBody)
             .foregroundStyle(AppTheme.Colors.primaryText)
             .onChange(of: birthDate) {
-                babyRepository.updateBirthDate(birthDate)
+                guard babyRepository.updateBirthDate(birthDate) else {
+                    showSaveError()
+                    return
+                }
             }
         }
         .padding(.vertical, 16)
@@ -157,11 +170,61 @@ struct BabyProfileView: View {
 
     private func toggleGender(_ target: BabyProfile.Gender) {
         if gender == target {
+            guard babyRepository.updateGender(nil) else {
+                showSaveError()
+                return
+            }
             gender = nil
-            babyRepository.updateGender(nil)
         } else {
+            guard babyRepository.updateGender(target) else {
+                showSaveError()
+                return
+            }
             gender = target
-            babyRepository.updateGender(target)
+        }
+    }
+
+    @ViewBuilder
+    private var saveFeedback: some View {
+        if let saveErrorMessage {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.Colors.secondaryText)
+                Text(saveErrorMessage)
+                    .font(AppTheme.Typography.meta)
+                    .foregroundStyle(AppTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(AppTheme.Colors.cardBackground.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .transition(.opacity)
+        }
+    }
+
+    private func showSaveError() {
+        saveErrorMessage = L10n.text(
+            "shell.profile.save_error",
+            en: "Changes could not be saved. Please try again.",
+            zh: "未能保存更改，请稍后再试。"
+        )
+        scheduleErrorDismiss()
+    }
+
+    private func scheduleErrorDismiss() {
+        errorDismissTask?.cancel()
+        errorDismissTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            saveErrorMessage = nil
+            errorDismissTask = nil
         }
     }
 

@@ -11,7 +11,7 @@ struct TreasureWeeklyLetterCard: View {
                     cardContent(showsExpandHint: true)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("打开这一周的信")
+                .accessibilityLabel(L10n.text("treasure.weekly_letter.open", en: "Open this week's letter", zh: "打开这一周的信"))
             } else {
                 cardContent(showsExpandHint: false)
             }
@@ -21,7 +21,7 @@ struct TreasureWeeklyLetterCard: View {
     private func cardContent(showsExpandHint: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("时光信笺")
+                Text(L10n.text("treasure.weekly_letter.title", en: "Weekly letter", zh: "时光信笺"))
                     .font(.system(size: 12, weight: .medium))
                     .tracking(0.4)
                     .foregroundStyle(TreasureTheme.textSecondary)

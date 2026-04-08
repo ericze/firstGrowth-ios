@@ -17,12 +17,15 @@ struct MilkTabSwitcher: View {
                                 ? AppTheme.Colors.primaryText
                                 : AppTheme.Colors.primaryText.opacity(0.4)
                         )
+                        .lineLimit(1)
+                        .frame(height: 32, alignment: .center)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
 
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
     }
 }

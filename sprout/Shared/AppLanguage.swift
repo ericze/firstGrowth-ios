@@ -58,7 +58,7 @@ final class AppLanguageManager {
 
     init(
         defaults: UserDefaults = .standard,
-        storageKey: String = Self.defaultStorageKey,
+        storageKey: String = "app_language",
         initialLanguage: AppLanguage? = nil
     ) {
         self.defaults = defaults

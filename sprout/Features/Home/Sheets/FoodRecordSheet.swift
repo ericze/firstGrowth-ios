@@ -1,4 +1,5 @@
 import Observation
+import os
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -16,7 +17,7 @@ struct FoodRecordSheet: View {
     private let tagColumns = [GridItem(.adaptive(minimum: 88), spacing: 10)]
 
     var body: some View {
-        BaseRecordSheet(title: String(localized: "home.sheet.food.title"), onClose: { store.requestFoodDismiss() }) {
+        BaseRecordSheet(title: store.foodSheetTitle, onClose: { store.requestFoodDismiss() }) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
                     FoodTagComposerSection(
@@ -66,6 +67,13 @@ struct FoodRecordSheet: View {
                         set: { store.updateFoodNote($0) }
                     ))
 
+                    FoodRecordTimeSection(
+                        timestamp: Binding(
+                            get: { store.foodDraftTimestamp },
+                            set: { store.updateFoodTimestamp($0) }
+                        )
+                    )
+
                     FoodPhotoPickerSection(
                         imagePath: store.foodDraft.selectedImagePath,
                         onAddPhoto: {
@@ -77,8 +85,8 @@ struct FoodRecordSheet: View {
                 .padding(.bottom, 12)
             }
         } footer: {
-            SheetPrimaryButton(title: String(localized: "common.done_record"), isEnabled: store.isFoodSaveEnabled) {
-                store.handle(.saveFood)
+            SheetPrimaryButton(title: store.foodPrimaryActionTitle, isEnabled: store.isFoodSaveEnabled) {
+                store.handle(store.isEditingFoodRecord ? .saveRecordEdits : .saveFood)
             }
         }
         .confirmationDialog(String(localized: "home.sheet.food.dialog.add_photo"), isPresented: $isShowingPhotoSourcePicker) {
@@ -127,7 +135,7 @@ struct FoodRecordSheet: View {
                 capturedImage = nil
                 AppHaptics.lightImpact()
             } catch {
-                assertionFailure("Camera image store failed: \(error)")
+                AppLogger.persistence.error("Camera image store failed: \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -140,7 +148,7 @@ struct FoodRecordSheet: View {
             store.setFoodImagePath(imagePath)
             AppHaptics.lightImpact()
         } catch {
-            assertionFailure("Photo library import failed: \(error)")
+            AppLogger.persistence.error("Photo library import failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -152,6 +160,17 @@ struct FoodRecordSheet: View {
     private func addSuggestedTag(_ tag: String) {
         guard store.addFoodTag(tag) else { return }
         customTagText = ""
+    }
+}
+
+private struct FoodRecordTimeSection: View {
+    @Binding var timestamp: Date
+
+    var body: some View {
+        RecordEditorDateField(
+            title: L10n.text("home.sheet.food.time.title", en: "Time", zh: "时间"),
+            date: $timestamp
+        )
     }
 }
 
@@ -223,28 +242,49 @@ private struct FoodPhotoPickerSection: View {
                 .font(AppTheme.Typography.meta)
                 .foregroundStyle(AppTheme.Colors.secondaryText)
 
-            if let imagePath, let image = UIImage(contentsOfFile: imagePath) {
-                ZStack(alignment: .topTrailing) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
+            if let imagePath {
+                VStack(alignment: .leading, spacing: 12) {
+                    Group {
+                        if let image = UIImage(contentsOfFile: imagePath) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            VStack(spacing: 10) {
+                                Image(systemName: "photo")
+                                    .font(.system(size: 24, weight: .light))
+                                    .foregroundStyle(AppTheme.Colors.secondaryText)
 
-                    Button(action: onRemovePhoto) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(AppTheme.Colors.primaryText)
-                            .frame(width: 30, height: 30)
-                            .background(AppTheme.Colors.cardBackground.opacity(0.92))
-                            .clipShape(Circle())
-                            .padding(12)
+                                Text(L10n.text("home.sheet.food.photo.selected", en: "Selected photo", zh: "已选图片"))
+                                    .font(AppTheme.Typography.sheetBody)
+                                    .foregroundStyle(AppTheme.Colors.secondaryText)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 180)
+                            .background(AppTheme.Colors.cardBackground)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(String(localized: "home.sheet.food.photo.delete_accessibility"))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.image, style: .continuous))
+
+                    HStack(spacing: 18) {
+                        Button(action: onAddPhoto) {
+                            Text(L10n.text("home.sheet.food.photo.replace", en: "Choose another photo", zh: "重选图片"))
+                                .font(AppTheme.Typography.meta)
+                                .foregroundStyle(AppTheme.Colors.secondaryText)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onRemovePhoto) {
+                            Text(L10n.text("home.sheet.food.photo.remove", en: "Remove photo", zh: "删除图片"))
+                                .font(AppTheme.Typography.meta)
+                                .foregroundStyle(AppTheme.Colors.secondaryText)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(String(localized: "home.sheet.food.photo.delete_accessibility"))
+                    }
                 }
-                .onTapGesture(perform: onAddPhoto)
             } else {
                 Button(action: onAddPhoto) {
                     VStack(spacing: 10) {

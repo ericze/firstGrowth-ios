@@ -38,7 +38,8 @@ func makeTestEnvironment(now initialDate: Date) throws -> TestEnvironment {
     let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     let container = try ModelContainer(for: schema, configurations: [configuration])
     let modelContext = ModelContext(container)
-    let recordRepository = RecordRepository(modelContext: modelContext)
+    let now = MutableNow(initialDate)
+    let recordRepository = RecordRepository(modelContext: modelContext, nowProvider: { now.value })
     let growthRepository = GrowthRecordRepository(modelContext: modelContext)
     let treasureRepository = TreasureRepository(modelContext: modelContext)
 
@@ -46,7 +47,6 @@ func makeTestEnvironment(now initialDate: Date) throws -> TestEnvironment {
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
 
-    let now = MutableNow(initialDate)
     let calendar = Calendar(identifier: .gregorian)
     let localizationService = LocalizationService(
         bundle: .main,

@@ -71,6 +71,8 @@ struct GrowthLifeLineChartCard: View {
 
                             if store.viewState.dataState == .empty {
                                 GrowthChartEmptyState(metric: store.viewState.currentMetric)
+                            } else if store.viewState.dataState == .error {
+                                GrowthChartErrorState(message: store.viewState.errorMessage ?? store.textRenderer.loadFailedMessage())
                             }
 
                             if let selection = store.viewState.selection, store.viewState.isPrecisionVisible {
@@ -191,6 +193,24 @@ private struct GrowthChartEmptyState: View {
                     arguments: [textRenderer.metricTitle(metric)]
                 )
             )
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 28)
+    }
+}
+
+private struct GrowthChartErrorState: View {
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(L10n.text("growth.chart.error.title", en: "Couldn't load this chart", zh: "这张图表暂时没有加载成功"))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(AppTheme.Colors.primaryText)
+
+            Text(message)
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(AppTheme.Colors.secondaryText)
                 .multilineTextAlignment(.center)

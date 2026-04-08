@@ -3,6 +3,8 @@ import SwiftUI
 struct RecordHomeScrollView: View {
     let store: HomeStore
     let isActiveTab: Bool
+    @State private var isTimelineScrollInteracting = false
+    @State private var scrollInteractionResetTask: Task<Void, Never>?
 
     init(store: HomeStore, isActiveTab: Bool = true) {
         self.store = store
@@ -39,16 +41,76 @@ struct RecordHomeScrollView: View {
             .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
             .padding(.bottom, 20)
         }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    guard shouldTrackTimelineScrollInteraction(for: value) else { return }
+                    scrollInteractionResetTask?.cancel()
+                    scrollInteractionResetTask = nil
+                    if !isTimelineScrollInteracting {
+                        isTimelineScrollInteracting = true
+                    }
+                }
+                .onEnded { value in
+                    guard shouldTrackTimelineScrollInteraction(for: value) else {
+                        isTimelineScrollInteracting = false
+                        return
+                    }
+                    scheduleScrollInteractionReset()
+                }
+        )
+        .onDisappear {
+            scrollInteractionResetTask?.cancel()
+            scrollInteractionResetTask = nil
+            isTimelineScrollInteracting = false
+        }
     }
 
     @ViewBuilder
     private func timelineCard(for item: TimelineDisplayItem) -> some View {
+        InteractiveTimelineRecordCard(
+            item: item,
+            store: store,
+            cornerRadius: timelineCardCornerRadius(for: item),
+            isInteractionEnabled: !isTimelineScrollInteracting
+        ) {
+            timelineCardContent(for: item)
+        }
+    }
+
+    @ViewBuilder
+    private func timelineCardContent(for item: TimelineDisplayItem) -> some View {
         switch item.cardStyle {
         case .standard:
             StandardRecordCard(item: item)
         case .foodPhoto:
             FoodPhotoCard(item: item)
         }
+    }
+
+    private func timelineCardCornerRadius(for item: TimelineDisplayItem) -> CGFloat {
+        switch item.cardStyle {
+        case .standard:
+            AppTheme.Radius.card
+        case .foodPhoto:
+            AppTheme.Radius.image
+        }
+    }
+
+    private func scheduleScrollInteractionReset() {
+        scrollInteractionResetTask?.cancel()
+        scrollInteractionResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            isTimelineScrollInteracting = false
+            scrollInteractionResetTask = nil
+        }
+    }
+
+    private func shouldTrackTimelineScrollInteraction(for value: DragGesture.Value) -> Bool {
+        let verticalDistance = abs(value.translation.height)
+        let horizontalDistance = abs(value.translation.width)
+        return verticalDistance >= 10 && verticalDistance > horizontalDistance
     }
 }
 

@@ -42,6 +42,21 @@ final class RecordItem {
     }
 }
 
+/// The minimal persisted data required to recreate a deleted home record.
+struct RecordRecoverySnapshot: Equatable {
+    let recordID: UUID
+    let timestamp: Date
+    let type: RecordType
+    let value: Double?
+    let leftNursingSeconds: Int
+    let rightNursingSeconds: Int
+    let subType: String?
+    let imageURL: String?
+    let aiSummary: String?
+    let tags: [String]?
+    let note: String?
+}
+
 extension RecordItem {
     var recordType: RecordType? {
         RecordType(rawValue: type)
@@ -59,5 +74,26 @@ extension RecordItem {
     var diaperType: DiaperSubtype? {
         guard let subType else { return nil }
         return DiaperSubtype(rawValue: subType)
+    }
+
+    var sleepEndedAt: Date? {
+        guard recordType == .sleep, let value else { return nil }
+        return timestamp.addingTimeInterval(value)
+    }
+
+    var recoverySnapshot: RecordRecoverySnapshot {
+        RecordRecoverySnapshot(
+            recordID: id,
+            timestamp: timestamp,
+            type: recordType ?? .milk,
+            value: value,
+            leftNursingSeconds: leftNursingSeconds,
+            rightNursingSeconds: rightNursingSeconds,
+            subType: subType,
+            imageURL: imageURL,
+            aiSummary: aiSummary,
+            tags: tags,
+            note: note
+        )
     }
 }

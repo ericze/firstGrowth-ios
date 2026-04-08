@@ -39,8 +39,16 @@ struct TreasureEmptyState: View {
 
     private var message: String {
         if dataState == .error {
-            return "这一页暂时没有顺利展开。"
+            return L10n.text(
+                "treasure.empty.error",
+                en: "This page couldn't open fully just now.",
+                zh: "这一页暂时没有顺利展开。"
+            )
         }
-        return "这里存放时间。点右上角的取景框，留住今天。"
+        return L10n.text(
+            "treasure.empty.default",
+            en: "This is where time is kept. Tap the camera above to capture today.",
+            zh: "这里存放时间。点右上角的取景框，留住今天。"
+        )
     }
 }

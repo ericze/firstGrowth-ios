@@ -4,6 +4,7 @@ enum RecordValidationError: Error, Equatable {
     case invalidType(String)
     case missingPositiveValue(RecordType)
     case invalidDiaperSubtype(String?)
+    case invalidSleepRange
     case emptyFood
 }
 
@@ -74,6 +75,56 @@ struct RecordValidator {
                 throw RecordValidationError.emptyFood
             }
         }
+    }
+
+    func validateFeeding(leftSeconds: Int, rightSeconds: Int, bottleAmountMl: Int) throws {
+        try validate(
+            type: .milk,
+            value: bottleAmountMl > 0 ? Double(bottleAmountMl) : nil,
+            leftNursingSeconds: leftSeconds,
+            rightNursingSeconds: rightSeconds,
+            subType: nil,
+            tags: nil,
+            note: nil,
+            imageURL: nil
+        )
+    }
+
+    func validateDiaper(subtype: DiaperSubtype) throws {
+        try validate(
+            type: .diaper,
+            value: nil,
+            subType: subtype.rawValue,
+            tags: nil,
+            note: nil,
+            imageURL: nil
+        )
+    }
+
+    func validateSleep(startedAt: Date, endedAt: Date) throws {
+        guard endedAt > startedAt else {
+            throw RecordValidationError.invalidSleepRange
+        }
+
+        try validate(
+            type: .sleep,
+            value: endedAt.timeIntervalSince(startedAt),
+            subType: nil,
+            tags: nil,
+            note: nil,
+            imageURL: nil
+        )
+    }
+
+    func validateFood(tags: [String], note: String?, imageURL: String?) throws {
+        try validate(
+            type: .food,
+            value: nil,
+            subType: nil,
+            tags: tags,
+            note: note,
+            imageURL: imageURL
+        )
     }
 }
 

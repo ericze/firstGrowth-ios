@@ -55,6 +55,7 @@ struct BottleLoggingTab: View {
             .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
             .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
         }
+        .frame(maxWidth: .infinity, minHeight: MilkSheetLayout.contentMinHeight, alignment: .top)
     }
 
     private func bottleStepperButton(systemName: String, step: Int) -> some View {

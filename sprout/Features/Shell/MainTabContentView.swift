@@ -67,11 +67,30 @@ struct MainTabContentView: View {
                     .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
                     .padding(.bottom, selectedTab == .record ? 134 : 36)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if let messageToast = activeMessageToast {
+                    MessageToast(
+                        state: messageToast,
+                        onDismiss: dismissMessage
+                    )
+                    .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
+                    .padding(.bottom, selectedTab == .record ? 134 : 36)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .animation(AppTheme.stateAnimation, value: activeUndoToast)
+            .animation(AppTheme.stateAnimation, value: activeMessageToast)
             .sheet(item: activeSheetBinding) { sheet in
                 sheetView(for: sheet)
+            }
+            .sheet(item: activeDeleteSummaryBinding) { summary in
+                RecordDeleteConfirmationSheet(
+                    summary: summary,
+                    onConfirm: { store.handle(.confirmDeleteRecord) },
+                    onCancel: { store.handle(.cancelDeleteRecord) }
+                )
+                .presentationDetents([.height(348)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(AppTheme.Colors.background)
             }
         }
     }
@@ -81,9 +100,27 @@ struct MainTabContentView: View {
             get: { store.routeState.activeSheet },
             set: { newValue in
                 if newValue == nil {
-                    store.handle(.dismissSheet)
+                    switch store.routeState.activeSheet {
+                    case .recordEditor:
+                        store.handle(.dismissRecordEditor)
+                    case .sleepControl:
+                        store.handle(.dismissSheet)
+                    case nil:
+                        break
+                    }
                 } else {
                     store.routeState.activeSheet = newValue
+                }
+            }
+        )
+    }
+
+    private var activeDeleteSummaryBinding: Binding<RecordDeleteSummary?> {
+        Binding(
+            get: { store.activeDeleteSummary },
+            set: { newValue in
+                if newValue == nil {
+                    store.handle(.cancelDeleteRecord)
                 }
             }
         )
@@ -100,10 +137,21 @@ struct MainTabContentView: View {
         }
     }
 
+    private var activeMessageToast: MessageToastState? {
+        switch selectedTab {
+        case .record:
+            store.viewState.messageToast
+        case .growth:
+            growthStore.viewState.messageToast
+        case .collection:
+            treasureStore.viewState.messageToast
+        }
+    }
+
     private func performUndo() {
         switch selectedTab {
         case .record:
-            store.handle(.undoLastRecord)
+            store.handle(store.activeUndoAction)
         case .growth:
             growthStore.handle(.undoLastRecord)
         case .collection:
@@ -122,28 +170,52 @@ struct MainTabContentView: View {
         }
     }
 
+    private func dismissMessage() {
+        switch selectedTab {
+        case .record:
+            store.handle(.dismissMessage)
+        case .growth:
+            growthStore.handle(.dismissMessage)
+        case .collection:
+            treasureStore.handle(.dismissMessage)
+        }
+    }
+
     @ViewBuilder
     private func sheetView(for sheet: ActiveSheet) -> some View {
         switch sheet {
+        case let .recordEditor(route):
+            recordEditorSheet(for: route)
+        case .sleepControl:
+            SleepControlSheet(store: store)
+                .presentationDetents([.height(360)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(AppTheme.Colors.background)
+        }
+    }
+
+    @ViewBuilder
+    private func recordEditorSheet(for route: RecordEditorRouteState) -> some View {
+        switch route.editorType {
         case .milk:
             MilkLoggingSheet(store: store)
-                .presentationDetents([.medium])
+                .presentationDetents(route.mode.recordID == nil ? [.height(452), .large] : [.height(580), .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(AppTheme.Colors.background)
         case .diaper:
             DiaperRecordSheet(store: store)
-                .presentationDetents([.height(392)])
+                .presentationDetents([.height(route.mode.recordID == nil ? 392 : 472)])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(AppTheme.Colors.background)
         case .food:
             FoodRecordSheet(store: store)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.fraction(0.72), .large])
                 .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled(store.shouldDisableFoodInteractiveDismiss)
                 .presentationBackground(AppTheme.Colors.background)
-        case .sleepControl:
-            SleepControlSheet(store: store)
-                .presentationDetents([.height(360)])
+        case .sleep:
+            SleepRecordEditorSheet(store: store)
+                .presentationDetents([.height(460), .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(AppTheme.Colors.background)
         }

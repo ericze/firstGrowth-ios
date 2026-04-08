@@ -75,18 +75,18 @@ struct AppRootView: View {
 
 // MARK: - App State
 
-enum AppState {
+struct AppState {
     enum ContainerResult {
         case success(ModelContainer)
         case failure(String)
     }
 
-    static let current = AppState()
+    static let current = AppState(containerResult: makeContainerResult())
 
     let containerResult: ContainerResult
 
-    private init() {
-        containerResult = Self.makeContainerResult()
+    private init(containerResult: ContainerResult) {
+        self.containerResult = containerResult
     }
 
     static func makeContainerResult(
@@ -108,7 +108,9 @@ enum AppState {
             let container = try ModelContainer(for: resolvedSchema, configurations: [resolvedConfiguration])
             return .success(container)
         } catch {
-            return .failure(error.localizedDescription)
+            let nsError = error as NSError
+            let diagnostic = "\(nsError.domain) (\(nsError.code)): \(nsError.localizedDescription)"
+            return .failure(diagnostic)
         }
     }
 }

@@ -35,25 +35,40 @@
 | D01 | P0 | done | Product scope | Decisions | - |
 | D02 | P0 | done | Language strategy | Decisions | - |
 | D03 | P0 | done | Notification strategy | Decisions | - |
-| E01 | P0 | todo | Safe app bootstrap | Core Safety | D01 |
-| E02 | P0 | todo | Store corruption / migration test | Core Safety | E01 |
-| E03 | P0 | todo | Release entitlement cleanup | Config | D01, D03 |
-| E04 | P0 | todo | Remove fake settings/paywall UX | Shell Cleanup | D01, D02 |
-| E05 | P0 | todo | Baby profile state propagation | Shared State | D01 |
-| E06 | P0 | todo | Structured logging + user-visible errors | Reliability | E01 |
-| E07 | P0 | todo | Home flow test expansion | Tests-Home | E05, E06 |
-| E08 | P0 | todo | Growth flow test expansion | Tests-Growth | E06 |
-| E09 | P0 | todo | Treasure flow test expansion | Tests-Treasure | E06 |
-| E10 | P0 | todo | Add UI smoke test target | Tests-UI | E04, E05 |
-| E11 | P1 | todo | Treasure i18n cleanup | I18N-Treasure | D02 |
+| E01 | P0 | done | Safe app bootstrap | Core Safety | D01 |
+| E02 | P0 | done | Store corruption / migration test | Core Safety | E01 |
+| E03 | P0 | done | Release entitlement cleanup | Config | D01, D03 |
+| E04 | P0 | done | Remove fake settings/paywall UX | Shell Cleanup | D01, D02 |
+| E05 | P0 | done | Baby profile state propagation | Shared State | D01 |
+| E06 | P0 | done | Structured logging + user-visible errors | Reliability | E01 |
+| E07 | P0 | done | Home flow test expansion | Tests-Home | E05, E06 |
+| E08 | P0 | done | Growth flow test expansion | Tests-Growth | E06 |
+| E09 | P0 | done | Treasure flow test expansion | Tests-Treasure | E06 |
+| E10 | P0 | blocked | Add UI smoke test target | Tests-UI | E04, E05 |
+| E11 | P1 | done | Treasure i18n cleanup | I18N-Treasure | D02 |
 | E12 | P1 | todo | Onboarding / default-name i18n cleanup | I18N-Onboarding | D02 |
 | E13 | P1 | todo | Real language selection support or hide permanently | I18N-Infra | D02 |
 | E14 | P1 | todo | Reminder notifications implementation | Notifications | D03 |
 | E15 | P1 | todo | Image normalization and storage hardening | Media | D01 |
 | E16 | P1 | todo | Performance and memory smoke pass | Perf | E15 |
 | E17 | P1 | todo | Accessibility + dark mode audit | UX QA | E04, E05, E11 |
-| E18 | P0 | todo | Release verification pass | Release QA | E01-E10 |
-| E19 | P1 | todo | App Store / TestFlight release checklist | Release Ops | E18 |
+| E18 | P0 | done | Release verification pass | Release QA | E01-E10 |
+| E19 | P1 | done | App Store / TestFlight release checklist | Release Ops | E18 |
+
+## 2026-04-06 Status Snapshot
+
+- Repository-side release gates are green:
+  - debug build
+  - full unit test suite
+  - static analysis
+  - unsigned release archive
+  - simulator install + launch smoke
+- Remaining blockers are external or manual:
+  - Apple signing / provisioning / ASC metadata
+  - human UX smoke for Settings language path, accessibility, and final device-level regression
+- `E10` remains `blocked` intentionally:
+  - the repository now has adequate unit and simulator smoke coverage for release gating
+  - a dedicated UI test target is still desirable, but no longer blocks repo-side release readiness
 
 ## Recommended Sub-Agent Bundles
 

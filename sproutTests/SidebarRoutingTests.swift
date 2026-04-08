@@ -4,9 +4,9 @@ import Testing
 @MainActor
 struct SidebarRoutingTests {
 
-    @Test("V1 sidebar contains exactly 2 items: profile and language")
+    @Test("V1 sidebar contains exactly 1 item: language")
     func testItemCount() {
-        #expect(SidebarIndexItem.items.count == 2)
+        #expect(SidebarIndexItem.items.count == 1)
     }
 
     @Test("all items have valid, non-nil routes")
@@ -19,13 +19,13 @@ struct SidebarRoutingTests {
     @Test("expected item IDs are present")
     func testExpectedIDs() {
         let ids = Set(SidebarIndexItem.items.map(\.id))
-        #expect(ids.contains("profile"))
         #expect(ids.contains("language"))
     }
 
     @Test("removed items are absent from V1")
     func testRemovedItems() {
         let ids = SidebarIndexItem.items.map(\.id)
+        #expect(!ids.contains("profile"))
         #expect(!ids.contains("cloud"))
         #expect(!ids.contains("family"))
         #expect(!ids.contains("rhythm"))
@@ -49,13 +49,6 @@ struct SidebarRoutingTests {
 
         #expect(englishTitles != chineseTitles)
         #expect(englishDetails != chineseDetails)
-    }
-
-    @Test("profile routes to babyProfile")
-    func testProfileRoute() {
-        let profile = SidebarIndexItem.items.first { $0.id == "profile" }
-        #expect(profile != nil)
-        #expect(profile?.route == .babyProfile)
     }
 
     @Test("language routes to language")

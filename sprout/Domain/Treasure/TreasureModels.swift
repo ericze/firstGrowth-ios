@@ -139,6 +139,7 @@ struct TreasureViewState: Equatable {
     var selectedWeeklyLetter: TreasureTimelineItem?
     var activeMonthAnchor: TreasureMonthAnchor?
     var undoToast: UndoToastState?
+    var messageToast: MessageToastState?
     var scrollTargetID: UUID?
     var errorMessage: String?
     var composeErrorMessage: String?
@@ -168,6 +169,7 @@ enum TreasureAction {
     case dismissComposeError
     case undoLastEntry
     case dismissUndo
+    case dismissMessage
     case tapWeeklyLetter(UUID)
     case dismissWeeklyLetter
     case beginMonthScrubbing(height: CGFloat, locationY: CGFloat)

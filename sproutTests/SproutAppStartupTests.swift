@@ -119,6 +119,12 @@ struct SproutAppStartupTests {
         #expect(view != nil)
     }
 
+    @Test("AppStartupErrorView can be instantiated with an empty error message")
+    func testErrorViewCreationWithEmptyMessage() async {
+        let view = AppStartupErrorView(errorMessage: "")
+        #expect(view != nil)
+    }
+
     // MARK: - AppRootView routes correctly
 
     @Test("AppRootView exists and can be created with a container")

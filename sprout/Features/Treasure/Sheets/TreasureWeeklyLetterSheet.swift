@@ -3,9 +3,10 @@ import SwiftUI
 struct TreasureWeeklyLetterSheet: View {
     let item: TreasureTimelineItem
     let onClose: () -> Void
+    private let localizationService = LocalizationService.current
 
     var body: some View {
-        BaseRecordSheet(title: "时光信笺", onClose: onClose) {
+        BaseRecordSheet(title: L10n.text("treasure.weekly_letter.title", en: "Weekly letter", zh: "时光信笺"), onClose: onClose) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     if let weekStart = item.weekStart, let weekEnd = item.weekEnd {
@@ -27,16 +28,16 @@ struct TreasureWeeklyLetterSheet: View {
     }
 
     private func rangeText(weekStart: Date, weekEnd: Date) -> String {
-        let formatter = TreasureWeeklyLetterRangeFormatter.shared
-        return "\(formatter.string(from: weekStart).uppercased()) - \(formatter.string(from: weekEnd).uppercased())"
-    }
-}
-
-private enum TreasureWeeklyLetterRangeFormatter {
-    static let shared: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MMM d"
-        return formatter
-    }()
+        formatter.locale = localizationService.locale
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        return L10n.format(
+            "treasure.weekly_letter.range",
+            service: localizationService,
+            locale: localizationService.locale,
+            en: "%@ - %@",
+            zh: "%@ - %@",
+            arguments: [formatter.string(from: weekStart), formatter.string(from: weekEnd)]
+        )
+    }
 }

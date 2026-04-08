@@ -214,6 +214,7 @@ struct GrowthViewState: Equatable {
     var yAxisLabels: [GrowthYAxisLabel] = []
     var entryDraft = GrowthEntryDraftState()
     var undoToast: UndoToastState?
+    var messageToast: MessageToastState?
     var hasLoadedInitialData = false
     var currentAgeInDays = 0
     var errorMessage: String?
@@ -236,6 +237,7 @@ enum GrowthAction {
     case saveRecord
     case undoLastRecord
     case dismissUndo
+    case dismissMessage
     case beginScrubbing(locationX: CGFloat, plotWidth: CGFloat)
     case updateScrubbing(locationX: CGFloat, plotWidth: CGFloat)
     case endScrubbing

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 import SwiftData
 
 @MainActor
@@ -18,6 +19,7 @@ final class TreasureStore {
     @ObservationIgnored private let dateProvider: () -> Date
     @ObservationIgnored private let imageRemover: @MainActor ([String]) -> Void
     @ObservationIgnored private var undoDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var messageDismissTask: Task<Void, Never>?
     @ObservationIgnored private var monthScrubberFadeTask: Task<Void, Never>?
     @ObservationIgnored private var monthHintTask: Task<Void, Never>?
     @ObservationIgnored private var fabRevealTask: Task<Void, Never>?
@@ -34,7 +36,9 @@ final class TreasureStore {
         monthHintStore: TreasureMonthHintStore? = nil,
         calendar: Calendar = .current,
         dateProvider: @escaping () -> Date = Date.init,
-        imageRemover: @escaping @MainActor ([String]) -> Void = TreasurePhotoStorage.removeImages(at:)
+        imageRemover: @escaping @MainActor ([String]) -> Void = { paths in
+            _ = TreasurePhotoStorage.removeImages(at: paths)
+        }
     ) {
         var resolvedCalendar = calendar
         resolvedCalendar.firstWeekday = 2
@@ -53,6 +57,7 @@ final class TreasureStore {
 
     deinit {
         undoDismissTask?.cancel()
+        messageDismissTask?.cancel()
         monthScrubberFadeTask?.cancel()
         monthHintTask?.cancel()
         fabRevealTask?.cancel()
@@ -73,7 +78,11 @@ extension TreasureStore {
     }
 
     var composeFailureMessage: String {
-        viewState.composeErrorMessage ?? "没有保存成功，请再试一次。"
+        viewState.composeErrorMessage ?? L10n.text(
+            "treasure.compose.error.save",
+            en: "Couldn't save this entry. Please try again.",
+            zh: "没有保存成功，请再试一次。"
+        )
     }
 
     func configure(modelContext: ModelContext) {
@@ -155,6 +164,9 @@ extension TreasureStore {
 
         case .dismissUndo:
             dismissUndoToast()
+
+        case .dismissMessage:
+            dismissMessageToast()
 
         case let .tapWeeklyLetter(id):
             openWeeklyLetter(id: id)
@@ -304,12 +316,23 @@ extension TreasureStore {
             viewState.composeDraft.reset()
             viewState.composeState = .closed
             refreshTimeline()
-            showUndoToast(recordID: createdEntry.id, message: "已留住今天")
+            showUndoToast(
+                recordID: createdEntry.id,
+                message: L10n.text(
+                    "treasure.undo.saved_entry",
+                    en: "Saved today",
+                    zh: "已留住今天"
+                )
+            )
             AppHaptics.success()
         } catch {
             viewState.composeState = .failed
-            viewState.composeErrorMessage = "没有保存成功，请再试一次。"
-            assertionFailure("Treasure save failed: \(error)")
+            viewState.composeErrorMessage = L10n.text(
+                "treasure.compose.error.save",
+                en: "Couldn't save this entry. Please try again.",
+                zh: "没有保存成功，请再试一次。"
+            )
+            logPersistenceError(error, message: "Treasure save failed")
         }
     }
 
@@ -325,7 +348,14 @@ extension TreasureStore {
             dismissUndoToast()
             refreshTimeline()
         } catch {
-            assertionFailure("Treasure undo failed: \(error)")
+            logPersistenceError(error, message: "Treasure undo failed")
+            showMessageToast(
+                L10n.text(
+                    "treasure.error.undo",
+                    en: "Couldn't undo that memory. Try again.",
+                    zh: "这次撤销珍藏没有成功，请再试一次。"
+                )
+            )
         }
     }
 
@@ -370,7 +400,11 @@ extension TreasureStore {
     private func refreshTimeline() {
         guard let repository else {
             viewState.dataState = .error
-            viewState.errorMessage = "珍藏内容暂不可用"
+            viewState.errorMessage = L10n.text(
+                "treasure.error.unavailable",
+                en: "Memories are unavailable right now.",
+                zh: "珍藏内容暂不可用"
+            )
             return
         }
 
@@ -396,8 +430,12 @@ extension TreasureStore {
             showMonthHintIfNeeded(with: anchors)
         } catch {
             viewState.dataState = .error
-            viewState.errorMessage = "珍藏内容加载失败"
-            assertionFailure("Treasure refresh failed: \(error)")
+            viewState.errorMessage = L10n.text(
+                "treasure.error.load",
+                en: "Couldn't load memories right now.",
+                zh: "珍藏内容加载失败"
+            )
+            logPersistenceError(error, message: "Treasure refresh failed")
         }
     }
 
@@ -479,6 +517,26 @@ extension TreasureStore {
         undoDismissTask?.cancel()
         undoDismissTask = nil
         viewState.undoToast = nil
+    }
+
+    private func showMessageToast(_ message: String) {
+        guard viewState.messageToast?.message != message else { return }
+
+        messageDismissTask?.cancel()
+        viewState.messageToast = MessageToastState(message: message)
+
+        messageDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled else { return }
+            self.viewState.messageToast = nil
+            self.messageDismissTask = nil
+        }
+    }
+
+    private func dismissMessageToast() {
+        messageDismissTask?.cancel()
+        messageDismissTask = nil
+        viewState.messageToast = nil
     }
 
     private func showMonthScrubber() {
@@ -569,7 +627,14 @@ extension TreasureStore {
                 generatedAt: dateProvider()
             )
         } catch {
-            assertionFailure("Treasure weekly letter sync failed: \(error)")
+            logPersistenceError(error, message: "Treasure weekly letter sync failed")
+            showMessageToast(
+                L10n.text(
+                    "treasure.error.weekly_letter",
+                    en: "Couldn't refresh the weekly letter right now.",
+                    zh: "这周的时光信笺暂时没有更新成功。"
+                )
+            )
         }
     }
 
@@ -624,6 +689,11 @@ extension TreasureStore {
     private func cancelFloatingAddButtonReveal() {
         fabRevealTask?.cancel()
         fabRevealTask = nil
+    }
+
+    private func logPersistenceError(_ error: Error, message: String) {
+        let errorDescription = String(describing: error)
+        AppLogger.persistence.error("\(message, privacy: .public): \(errorDescription, privacy: .public)")
     }
 }
 

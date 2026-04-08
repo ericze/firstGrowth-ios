@@ -23,7 +23,7 @@ struct TreasureMemoryCard: View {
                         .lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if item.hasImageLoadError {
-                    Text("这张照片暂时没有加载出来。")
+                    Text(L10n.text("treasure.memory.image_error", en: "This photo couldn't load just now.", zh: "这张照片暂时没有加载出来。"))
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(TreasureTheme.textSecondary.opacity(0.7))
                 }
@@ -131,17 +131,28 @@ enum TreasureTimestampFormatter {
 
     final class Formatter {
         private let formatter: DateFormatter
+        private let localizationService: LocalizationService
+        private let localeFormatter: LocaleFormatter
 
         init() {
+            localizationService = .current
+            localeFormatter = LocaleFormatter(localizationService: localizationService)
             formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "MMM d"
+            formatter.locale = localizationService.locale
+            formatter.setLocalizedDateFormatFromTemplate("MMM d")
         }
 
         func string(from date: Date, ageInDays: Int?) -> String {
-            let dateText = formatter.string(from: date).uppercased()
+            let dateText = formatter.string(from: date)
             if let ageInDays {
-                return "\(dateText) · \(ageInDays)天"
+                return L10n.format(
+                    "treasure.memory.meta.with_age",
+                    service: localizationService,
+                    locale: localizationService.locale,
+                    en: "%@ · %@ days",
+                    zh: "%@ · %@天",
+                    arguments: [dateText, localeFormatter.integer(ageInDays)]
+                )
             }
             return dateText
         }

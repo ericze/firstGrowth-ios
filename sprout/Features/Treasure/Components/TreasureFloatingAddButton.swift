@@ -10,7 +10,7 @@ struct TreasureFloatingAddButton: View {
                 Image(systemName: "camera.fill")
                     .font(.system(size: 11, weight: .medium))
 
-                Text("留住今天")
+                Text(L10n.text("treasure.fab.label", en: "Capture today", zh: "留住今天"))
                     .font(.system(size: 14, weight: .medium))
             }
             .foregroundStyle(TreasureTheme.floatingButtonForeground)
@@ -28,7 +28,7 @@ struct TreasureFloatingAddButton: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("留住今天")
+        .accessibilityLabel(L10n.text("treasure.fab.accessibility", en: "Capture today", zh: "留住今天"))
         .offset(y: isVisible ? 0 : 100)
         .opacity(isVisible ? 1 : 0)
     }

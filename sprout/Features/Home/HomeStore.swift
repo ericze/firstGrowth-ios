@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 import SwiftData
 
 @MainActor
@@ -8,7 +9,10 @@ final class HomeStore {
     var routeState = HomeRouteState()
     var viewState = HomeViewState()
     var foodDraft = FoodDraftState()
+    var foodDraftTimestamp = Date()
     var milkDraft = FeedingDraftState()
+    var diaperDraft = DiaperDraftState()
+    var sleepEditDraft = SleepRecordEditDraft(startTime: Date(), endTime: Date())
     var isShowingFoodDiscardConfirmation = false
 
     var headerConfig: HomeHeaderConfig
@@ -22,36 +26,47 @@ final class HomeStore {
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private let dateProvider: () -> Date
     @ObservationIgnored private let historyPageSize: Int
+    @ObservationIgnored private var foodEditorSession = FoodEditorSession.create(at: Date())
     @ObservationIgnored private var loadedHistoryCount = 0
     @ObservationIgnored private var undoDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var messageDismissTask: Task<Void, Never>?
     init(
         headerConfig: HomeHeaderConfig,
         recordRepository: RecordRepository? = nil,
         formatter: TimelineContentFormatter? = nil,
-        localizationService: LocalizationService = .current,
+        localizationService: LocalizationService? = nil,
         sleepSessionRepository: SleepSessionRepository = SleepSessionRepository(),
         calendar: Calendar = .current,
         historyPageSize: Int = 20,
         dateProvider: @escaping () -> Date = Date.init
     ) {
+        let resolvedLocalizationService = localizationService ?? .current
         self.headerConfig = headerConfig
         self.recordRepository = recordRepository
-        self.localizationService = localizationService
-        self.formatter = formatter ?? TimelineContentFormatter(localizationService: localizationService)
+        self.localizationService = resolvedLocalizationService
+        self.formatter = formatter ?? TimelineContentFormatter(localizationService: resolvedLocalizationService)
         self.localeFormatter = LocaleFormatter(
-            locale: localizationService.locale,
+            locale: resolvedLocalizationService.locale,
             calendar: calendar,
-            localizationService: localizationService
+            localizationService: resolvedLocalizationService
         )
-        self.foodTagCatalog = FoodTagCatalog(language: localizationService.language)
+        self.foodTagCatalog = FoodTagCatalog(language: resolvedLocalizationService.language)
         self.sleepSessionRepository = sleepSessionRepository
         self.calendar = calendar
         self.historyPageSize = historyPageSize
         self.dateProvider = dateProvider
+
+        let initialDraftDate = dateProvider()
+        self.foodDraftTimestamp = initialDraftDate
+        self.milkDraft = FeedingDraftState(recordedAt: initialDraftDate)
+        self.diaperDraft = DiaperDraftState(recordedAt: initialDraftDate)
+        self.foodEditorSession = FoodEditorSession.create(at: initialDraftDate)
+        self.sleepEditDraft = SleepRecordEditDraft(startTime: initialDraftDate, endTime: initialDraftDate)
     }
 
     deinit {
         undoDismissTask?.cancel()
+        messageDismissTask?.cancel()
     }
 }
 extension HomeStore {
@@ -88,15 +103,98 @@ extension HomeStore {
     }
 
     var isFoodSaveEnabled: Bool {
-        foodDraft.hasContent
+        guard foodDraft.hasContent else { return false }
+
+        if isEditingFoodRecord {
+            return hasUnsavedFoodChanges
+        }
+
+        return true
+    }
+
+    var hasUnsavedFoodChanges: Bool {
+        if isEditingFoodRecord {
+            return foodDraftSnapshot != foodEditorSession.baseline
+        }
+
+        guard foodDraft.hasContent else { return false }
+        return foodDraftSnapshot != foodEditorSession.baseline
     }
 
     var shouldDisableFoodInteractiveDismiss: Bool {
-        routeState.activeSheet == .food && foodDraft.hasContent
+        routeState.activeSheet?.isFoodRecordEditor == true && hasUnsavedFoodChanges
     }
 
     var canRevealSidebarFromRoot: Bool {
-        routeState.activeSheet == nil && !isShowingFoodDiscardConfirmation
+        routeState.activeSheet == nil &&
+            routeState.recordDeleteState.summary == nil &&
+            !viewState.recordMutationState.isInFlight &&
+            viewState.recordInteractionFocusState == .timelineIdle &&
+            !isShowingFoodDiscardConfirmation
+    }
+
+    var activeRecordEditorRoute: RecordEditorRouteState? {
+        routeState.recordEditorRoute
+    }
+
+    var activeDeleteSummary: RecordDeleteSummary? {
+        routeState.recordDeleteState.summary
+    }
+
+    var activeUndoAction: HomeAction {
+        switch viewState.recordFeedbackState {
+        case .undoDelete:
+            .undoDeletedRecord
+        case .undoCreate:
+            .undoLastRecord
+        case .none, .message:
+            .dismissUndo
+        }
+    }
+
+    var foodSheetTitle: String {
+        isEditingFoodRecord
+            ? editRecordSheetTitle()
+            : String(localized: "home.sheet.food.title")
+    }
+
+    var foodPrimaryActionTitle: String {
+        isEditingFoodRecord
+            ? saveRecordChangesTitle()
+            : String(localized: "common.done_record")
+    }
+
+    var sleepSheetTitle: String {
+        editRecordSheetTitle()
+    }
+
+    var sleepPrimaryActionTitle: String {
+        saveRecordChangesTitle()
+    }
+
+    var isSleepEditSaveEnabled: Bool {
+        isEditingSleepRecord && sleepEditDraft.isValid && sleepEditDraft.hasChanges
+    }
+
+    var sleepEditValidationMessage: String? {
+        guard isEditingSleepRecord, !sleepEditDraft.isValid else { return nil }
+
+        return L10n.text(
+            "home.sheet.sleep.edit.validation.end_before_start",
+            service: localizationService,
+            en: "Set the end time after the start time.",
+            zh: "请把结束时间调到开始时间之后。"
+        )
+    }
+
+    var isEditingFoodRecord: Bool {
+        routeState.recordEditorRoute?.editorType == .food &&
+            routeState.recordEditorRoute?.mode.recordID != nil
+    }
+
+    var isEditingSleepRecord: Bool {
+        routeState.recordEditorRoute?.editorType == .sleep &&
+            routeState.recordEditorRoute?.mode.recordID != nil
     }
 
     func configure(modelContext: ModelContext) {
@@ -129,24 +227,43 @@ extension HomeStore {
             updateFirstTasteFoodTags()
             viewState.hasLoadedInitialData = true
         case .tapMilkEntry:
-            milkDraft.reset()
-            routeState.activeSheet = .milk
+            milkDraft.reset(now: dateProvider())
+            presentRecordEditor(editorType: .milk, mode: .create)
             AppHaptics.lightImpact()
         case .tapDiaperEntry:
-            routeState.activeSheet = .diaper
+            diaperDraft.reset(now: dateProvider())
+            presentRecordEditor(editorType: .diaper, mode: .create)
             AppHaptics.lightImpact()
         case .tapSleepEntry:
             handleSleepEntry()
         case .tapFoodEntry:
             resetFoodDraft(removeStoredImage: true)
-            routeState.activeSheet = .food
+            presentRecordEditor(editorType: .food, mode: .create)
             AppHaptics.lightImpact()
         case .tapOngoingSleep:
             guard viewState.ongoingSleep != nil else { return }
             routeState.activeSheet = .sleepControl
             AppHaptics.lightImpact()
+        case let .tapTimelineRecord(recordID):
+            tapTimelineRecord(recordID)
+        case let .longPressTimelineRecord(recordID):
+            longPressTimelineRecord(recordID)
+        case .releaseTimelineRecordPress:
+            releaseTimelineRecordPress()
+        case .dismissRecordContextMenu:
+            dismissRecordContextMenu()
+        case let .selectRecordContextEdit(recordID):
+            selectRecordContextEdit(recordID)
+        case let .selectRecordContextDelete(recordID):
+            selectRecordContextDelete(recordID)
+        case .cancelDeleteRecord:
+            cancelDeleteRecord()
+        case .confirmDeleteRecord:
+            confirmDeleteRecord()
         case .dismissSheet:
             dismissActiveSheet()
+        case .dismissRecordEditor:
+            dismissRecordEditor()
         case let .selectMilkTab(tab):
             guard milkDraft.selectedTab != tab else { return }
             milkDraft.selectTab(tab)
@@ -167,10 +284,16 @@ extension HomeStore {
             finishSleep()
         case .saveFood:
             saveFood()
+        case .saveRecordEdits:
+            saveRecordEdits()
         case .undoLastRecord:
             undoLastRecord()
+        case .undoDeletedRecord:
+            undoDeletedRecord()
         case .dismissUndo:
             dismissUndoToast()
+        case .dismissMessage:
+            dismissMessageToast()
         case let .loadMoreIfNeeded(recordID):
             loadMoreHistoryIfNeeded(for: recordID)
         }
@@ -222,35 +345,52 @@ extension HomeStore {
         foodDraft.note = note
     }
 
+    func updateFoodTimestamp(_ timestamp: Date) {
+        foodDraftTimestamp = timestamp
+    }
+
     func setFoodImagePath(_ path: String?) {
-        if let currentPath = foodDraft.selectedImagePath, currentPath != path {
+        if let currentPath = foodDraft.selectedImagePath,
+           currentPath != path,
+           shouldRemoveFoodDraftImage(at: currentPath) {
             FoodPhotoStorage.removeImage(at: currentPath)
         }
         foodDraft.selectedImagePath = path
     }
 
     func removeFoodImage() {
-        FoodPhotoStorage.removeImage(at: foodDraft.selectedImagePath)
+        if shouldRemoveFoodDraftImage(at: foodDraft.selectedImagePath) {
+            FoodPhotoStorage.removeImage(at: foodDraft.selectedImagePath)
+        }
         foodDraft.selectedImagePath = nil
     }
 
+    func updateSleepEditStartTime(_ date: Date) {
+        sleepEditDraft.startTime = date
+    }
+
+    func updateSleepEditEndTime(_ date: Date) {
+        sleepEditDraft.endTime = date
+    }
+
     func requestFoodDismiss() {
-        guard routeState.activeSheet == .food else {
+        guard routeState.activeSheet?.isFoodRecordEditor == true else {
             routeState.activeSheet = nil
+            viewState.recordInteractionFocusState = .timelineIdle
             return
         }
 
-        if foodDraft.hasContent {
+        if hasUnsavedFoodChanges {
             isShowingFoodDiscardConfirmation = true
         } else {
-            routeState.activeSheet = nil
+            dismissRecordEditor()
         }
     }
 
     func discardFoodDraft() {
         resetFoodDraft(removeStoredImage: true)
         isShowingFoodDiscardConfirmation = false
-        routeState.activeSheet = nil
+        dismissRecordEditor()
     }
 
     func keepEditingFoodDraft() {
@@ -259,6 +399,8 @@ extension HomeStore {
 
     private func handleSleepEntry() {
         if viewState.ongoingSleep != nil {
+            dismissTransientFeedback()
+            clearRecordDeleteState()
             routeState.activeSheet = .sleepControl
             AppHaptics.lightImpact()
             return
@@ -272,14 +414,224 @@ extension HomeStore {
 
     private func dismissActiveSheet() {
         switch routeState.activeSheet {
-        case .milk:
-            milkDraft.reset()
-            routeState.activeSheet = nil
-        case .food:
+        case let .recordEditor(route) where route.editorType == .food:
             requestFoodDismiss()
+        case let .recordEditor(route):
+            if route.mode.recordID == nil, route.editorType == .milk {
+                milkDraft.reset(now: dateProvider())
+            } else if route.mode.recordID == nil, route.editorType == .diaper {
+                diaperDraft.reset(now: dateProvider())
+            }
+            dismissRecordEditor()
+        case .sleepControl:
+            routeState.activeSheet = nil
         default:
             routeState.activeSheet = nil
         }
+    }
+
+    private func tapTimelineRecord(_ recordID: UUID) {
+        guard canBeginTimelineRecordInteraction(recordID) else { return }
+        dismissTransientFeedback()
+        clearRecordDeleteState()
+        viewState.recordCellInteractionState = .pressing(recordID: recordID)
+        viewState.recordInteractionFocusState = .recordPressed(recordID)
+    }
+
+    private func longPressTimelineRecord(_ recordID: UUID) {
+        guard canBeginTimelineRecordInteraction(recordID) else { return }
+        dismissTransientFeedback()
+        viewState.recordCellInteractionState = .menuTargeted(recordID: recordID)
+        viewState.recordInteractionFocusState = .contextMenu(recordID)
+    }
+
+    private func releaseTimelineRecordPress() {
+        guard case let .recordPressed(recordID) = viewState.recordInteractionFocusState else { return }
+        viewState.recordCellInteractionState = .idle
+        openRecordEditor(for: recordID)
+    }
+
+    private func dismissRecordContextMenu() {
+        guard case .contextMenu = viewState.recordInteractionFocusState else { return }
+        viewState.recordCellInteractionState = .idle
+        viewState.recordInteractionFocusState = .timelineIdle
+    }
+
+    private func selectRecordContextEdit(_ recordID: UUID) {
+        guard isContextMenuTargeting(recordID) else { return }
+
+        viewState.recordCellInteractionState = .idle
+        openRecordEditor(for: recordID)
+    }
+
+    private func selectRecordContextDelete(_ recordID: UUID) {
+        guard isContextMenuTargeting(recordID) else { return }
+
+        guard let record = fetchEditableRecord(id: recordID) else {
+            resetRecordInteractionState()
+            showMessageToast(missingRecordMessage())
+            return
+        }
+
+        let summary = makeDeleteSummary(for: record)
+        routeState.activeSheet = nil
+        routeState.recordDeleteState = .confirming(summary: summary)
+        viewState.recordCellInteractionState = .idle
+        viewState.recordInteractionFocusState = .deleteConfirming(recordID)
+    }
+
+    private func cancelDeleteRecord() {
+        clearRecordDeleteState()
+        if case .deleteConfirming = viewState.recordInteractionFocusState {
+            viewState.recordInteractionFocusState = .timelineIdle
+        }
+    }
+
+    private func confirmDeleteRecord() {
+        guard
+            let recordRepository,
+            case let .confirming(summary) = routeState.recordDeleteState,
+            case let .deleteConfirming(focusedRecordID) = viewState.recordInteractionFocusState,
+            focusedRecordID == summary.recordID
+        else {
+            return
+        }
+
+        guard let record = fetchEditableRecord(id: summary.recordID) else {
+            clearRecordDeleteState()
+            viewState.recordInteractionFocusState = .timelineIdle
+            showMessageToast(missingRecordMessage())
+            return
+        }
+
+        let snapshot = makeDeletedRecordSnapshot(from: record)
+        viewState.recordMutationState = .deleting(recordID: summary.recordID)
+
+        do {
+            try recordRepository.deleteRecord(id: summary.recordID, strategy: .undoable)
+            clearRecordDeleteState()
+            viewState.recordInteractionFocusState = .timelineIdle
+            viewState.recordMutationState = .idle
+            reloadTimeline()
+            refreshRecentFoodTags()
+            refreshKnownFoodTags()
+            showDeleteUndoToast(snapshot)
+            AppHaptics.lightImpact()
+        } catch {
+            clearRecordDeleteState()
+            viewState.recordInteractionFocusState = .timelineIdle
+            viewState.recordMutationState = .idle
+            handlePersistenceError(
+                error,
+                logMessage: "Delete record failed",
+                userMessage: deleteFailedMessage()
+            )
+        }
+    }
+
+    private func dismissRecordEditor() {
+        let activeRoute = routeState.recordEditorRoute
+        isShowingFoodDiscardConfirmation = false
+        routeState.activeSheet = nil
+        if activeRoute?.editorType == .food {
+            resetFoodDraft(removeStoredImage: true)
+        } else if activeRoute?.editorType == .sleep {
+            resetSleepEditDraft()
+        }
+        resetRecordInteractionState()
+        if case .savingEdit = viewState.recordMutationState {
+            viewState.recordMutationState = .idle
+        }
+    }
+
+    private func prepareRecordEditSave() {
+        guard
+            let route = routeState.recordEditorRoute,
+            let recordID = route.mode.recordID
+        else {
+            return
+        }
+
+        viewState.recordMutationState = .savingEdit(recordID: recordID)
+    }
+
+    private func saveRecordEdits() {
+        guard
+            let route = routeState.recordEditorRoute,
+            let recordID = route.mode.recordID,
+            let recordRepository,
+            !viewState.recordMutationState.isInFlight
+        else {
+            return
+        }
+
+        switch route.editorType {
+        case .food:
+            guard isFoodSaveEnabled else { return }
+        case .sleep:
+            guard isSleepEditSaveEnabled else { return }
+        case .milk:
+            saveEditedFeedingRecord(recordID: recordID, using: recordRepository)
+            return
+        case .diaper:
+            saveEditedDiaperRecord(recordID: recordID, using: recordRepository)
+            return
+        }
+
+        prepareRecordEditSave()
+
+        do {
+            let updatedRecord: RecordItem
+
+            switch route.editorType {
+            case .food:
+                updatedRecord = try recordRepository.updateFoodRecord(
+                    id: recordID,
+                    tags: uniqueFoodTags(from: foodDraft.selectedTags),
+                    note: foodDraft.note,
+                    imageURL: foodDraft.selectedImagePath,
+                    at: foodDraftTimestamp
+                )
+                resetFoodDraft(removeStoredImage: false)
+            case .sleep:
+                updatedRecord = try recordRepository.updateSleepRecord(
+                    id: recordID,
+                    startedAt: sleepEditDraft.startTime,
+                    endedAt: sleepEditDraft.endTime
+                )
+                resetSleepEditDraft()
+            case .milk, .diaper:
+                return
+            }
+
+            completeRecordEditSave(with: updatedRecord)
+        } catch {
+            failRecordEditSave(error)
+        }
+    }
+
+    func completeRecordEditSave(with updatedRecord: RecordItem) {
+        let startOfDay = calendar.startOfDay(for: dateProvider())
+        if updatedRecord.timestamp < startOfDay {
+            loadedHistoryCount = max(loadedHistoryCount, 1)
+        }
+
+        viewState.recordMutationState = .idle
+        dismissRecordEditor()
+        reloadTimeline()
+        refreshRecentFoodTags()
+        refreshKnownFoodTags()
+        showMessageToast(updatedRecordMessage())
+        AppHaptics.mediumImpact()
+    }
+
+    func failRecordEditSave(_ error: Error) {
+        viewState.recordMutationState = .idle
+        handlePersistenceError(
+            error,
+            logMessage: "Edit record failed",
+            userMessage: editFailedMessage()
+        )
     }
 
     private func adjustBottleAmount(_ step: Int) {
@@ -292,6 +644,49 @@ extension HomeStore {
 
         if milkDraft.bottleAmountMl != previousAmount {
             AppHaptics.softImpact()
+        }
+    }
+
+    private func saveEditedFeedingRecord(recordID: UUID, using recordRepository: RecordRepository) {
+        let now = dateProvider()
+        milkDraft.pauseActiveSide(now: now)
+
+        let leftSeconds = milkDraft.leftAccumulatedSeconds
+        let rightSeconds = milkDraft.rightAccumulatedSeconds
+        let bottleAmountMl = milkDraft.bottleAmountMl
+
+        guard leftSeconds > 0 || rightSeconds > 0 || bottleAmountMl > 0 else { return }
+
+        prepareRecordEditSave()
+
+        do {
+            let updatedRecord = try recordRepository.updateFeedingRecord(
+                id: recordID,
+                leftSeconds: leftSeconds,
+                rightSeconds: rightSeconds,
+                bottleAmountMl: bottleAmountMl,
+                at: milkDraft.recordedAt
+            )
+            completeRecordEditSave(with: updatedRecord)
+        } catch {
+            failRecordEditSave(error)
+        }
+    }
+
+    private func saveEditedDiaperRecord(recordID: UUID, using recordRepository: RecordRepository) {
+        guard let subtype = diaperDraft.selectedSubtype else { return }
+
+        prepareRecordEditSave()
+
+        do {
+            let updatedRecord = try recordRepository.updateDiaperRecord(
+                id: recordID,
+                subtype: subtype,
+                at: diaperDraft.recordedAt
+            )
+            completeRecordEditSave(with: updatedRecord)
+        } catch {
+            failRecordEditSave(error)
         }
     }
 
@@ -315,12 +710,21 @@ extension HomeStore {
                 at: now
             )
             let title = formatter.makeDisplayItem(from: record)?.title ?? formatter.defaultFeedingTitle()
-            milkDraft.reset()
-            routeState.activeSheet = nil
+            milkDraft.reset(now: now)
+            dismissRecordEditor()
             integrateCreatedRecord(record, message: formatter.savedRecordMessage(title: title))
             AppHaptics.mediumImpact()
         } catch {
-            assertionFailure("Feeding save failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Feeding save failed",
+                userMessage: L10n.text(
+                    "home.error.save",
+                    service: localizationService,
+                    en: "Couldn't save this record. Try again.",
+                    zh: "这次记录没有保存成功，请再试一次。"
+                )
+            )
         }
     }
 
@@ -329,11 +733,20 @@ extension HomeStore {
 
         do {
             let record = try recordRepository.createDiaperRecord(subtype: subtype, at: dateProvider())
-            routeState.activeSheet = nil
+            dismissRecordEditor()
             integrateCreatedRecord(record, message: formatter.savedRecordMessage(title: formatter.formatDiaperTitle(subType: subtype.rawValue)))
             AppHaptics.mediumImpact()
         } catch {
-            assertionFailure("Diaper save failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Diaper save failed",
+                userMessage: L10n.text(
+                    "home.error.save",
+                    service: localizationService,
+                    en: "Couldn't save this record. Try again.",
+                    zh: "这次记录没有保存成功，请再试一次。"
+                )
+            )
         }
     }
 
@@ -351,7 +764,16 @@ extension HomeStore {
             integrateCreatedRecord(record, message: formatter.endedSleepMessage())
             AppHaptics.success()
         } catch {
-            assertionFailure("Sleep finish failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Sleep finish failed",
+                userMessage: L10n.text(
+                    "home.error.sleep.finish",
+                    service: localizationService,
+                    en: "Couldn't finish sleep right now. Try again.",
+                    zh: "这次没有成功结束睡眠，请再试一次。"
+                )
+            )
         }
     }
 
@@ -363,27 +785,84 @@ extension HomeStore {
                 tags: uniqueFoodTags(from: foodDraft.selectedTags),
                 note: foodDraft.note,
                 imageURL: foodDraft.selectedImagePath,
-                at: dateProvider()
+                at: foodDraftTimestamp
             )
             resetFoodDraft(removeStoredImage: false)
-            routeState.activeSheet = nil
+            dismissRecordEditor()
             integrateCreatedRecord(record, message: formatter.savedFoodMessage())
             AppHaptics.mediumImpact()
         } catch {
-            assertionFailure("Food save failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Food save failed",
+                userMessage: L10n.text(
+                    "home.error.save",
+                    service: localizationService,
+                    en: "Couldn't save this record. Try again.",
+                    zh: "这次记录没有保存成功，请再试一次。"
+                )
+            )
         }
     }
 
     private func undoLastRecord() {
-        guard let recordRepository, let undoToast = viewState.undoToast else { return }
+        guard
+            let recordRepository,
+            case let .undoCreate(undoToast) = viewState.recordFeedbackState
+        else {
+            return
+        }
 
         do {
             try recordRepository.deleteRecord(id: undoToast.recordID)
             dismissUndoToast()
             reloadTimeline()
             refreshRecentFoodTags()
+            refreshKnownFoodTags()
         } catch {
-            assertionFailure("Undo failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Home undo failed",
+                userMessage: L10n.text(
+                    "home.error.undo",
+                    service: localizationService,
+                    en: "Couldn't undo that record. Try again.",
+                    zh: "这次撤销没有成功，请再试一次。"
+                )
+            )
+        }
+    }
+
+    private func undoDeletedRecord() {
+        guard
+            let recordRepository,
+            case let .undoDelete(snapshot) = viewState.recordFeedbackState
+        else {
+            return
+        }
+
+        viewState.recordMutationState = .restoringDeleted(recordID: snapshot.recordID)
+
+        do {
+            let startOfDay = calendar.startOfDay(for: dateProvider())
+            if snapshot.timestamp < startOfDay {
+                loadedHistoryCount = max(loadedHistoryCount, 1)
+            }
+            _ = try restoreDeletedRecord(from: snapshot, using: recordRepository)
+            dismissUndoToast()
+            viewState.recordMutationState = .idle
+            reloadTimeline()
+            refreshRecentFoodTags()
+            refreshKnownFoodTags()
+            showMessageToast(restoredRecordMessage())
+            AppHaptics.mediumImpact()
+        } catch {
+            viewState.recordMutationState = .idle
+            handlePersistenceError(
+                error,
+                logMessage: "Restore deleted record failed",
+                userMessage: undoFailedMessage()
+            )
         }
     }
 
@@ -396,7 +875,7 @@ extension HomeStore {
         reloadTimeline()
         refreshRecentFoodTags()
         refreshKnownFoodTags()
-        showUndoToast(recordID: record.id, message: message)
+        showCreateUndoToast(recordID: record.id, message: message)
     }
 
     private func reloadTimeline() {
@@ -412,7 +891,16 @@ extension HomeStore {
                 from: try recordRepository.fetchTodayRecords(referenceDate: dateProvider())
             )
         } catch {
-            assertionFailure("Reload today records failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Reload today records failed",
+                userMessage: L10n.text(
+                    "home.error.load",
+                    service: localizationService,
+                    en: "Couldn't load today's records.",
+                    zh: "今天的记录暂时没有加载成功。"
+                )
+            )
         }
     }
 
@@ -431,7 +919,16 @@ extension HomeStore {
             viewState.historyDisplayItems = formatter.makeDisplayItems(from: Array(records.prefix(loadedHistoryCount)))
             viewState.hasMoreHistory = records.count > loadedHistoryCount
         } catch {
-            assertionFailure("Reload history failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Reload history failed",
+                userMessage: L10n.text(
+                    "home.error.load.history",
+                    service: localizationService,
+                    en: "Couldn't load earlier records.",
+                    zh: "更早的记录暂时没有加载成功。"
+                )
+            )
         }
     }
 
@@ -441,7 +938,16 @@ extension HomeStore {
         do {
             viewState.recentFoodTags = uniqueFoodTags(from: try recordRepository.fetchRecentFoodTags())
         } catch {
-            assertionFailure("Refresh recent food tags failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Refresh recent food tags failed",
+                userMessage: L10n.text(
+                    "home.error.tags",
+                    service: localizationService,
+                    en: "Couldn't refresh recent tags.",
+                    zh: "最近的辅食标签暂时没有加载成功。"
+                )
+            )
         }
     }
 
@@ -459,7 +965,16 @@ extension HomeStore {
             viewState.knownFoodTags = uniqueFoodTags(from: tags)
             updateFirstTasteFoodTags()
         } catch {
-            assertionFailure("Refresh known food tags failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Refresh known food tags failed",
+                userMessage: L10n.text(
+                    "home.error.tags",
+                    service: localizationService,
+                    en: "Couldn't refresh recent tags.",
+                    zh: "最近的辅食标签暂时没有加载成功。"
+                )
+            )
         }
     }
 
@@ -488,33 +1003,393 @@ extension HomeStore {
             loadedHistoryCount = viewState.historyDisplayItems.count
             viewState.hasMoreHistory = records.count == historyPageSize
         } catch {
-            assertionFailure("Load more history failed: \(error)")
+            handlePersistenceError(
+                error,
+                logMessage: "Load more history failed",
+                userMessage: L10n.text(
+                    "home.error.load.history",
+                    service: localizationService,
+                    en: "Couldn't load earlier records.",
+                    zh: "更早的记录暂时没有加载成功。"
+                )
+            )
         }
+    }
+
+    private func canBeginTimelineRecordInteraction(_ recordID: UUID) -> Bool {
+        guard !viewState.recordMutationState.isInFlight else { return false }
+        guard routeState.activeSheet == nil else { return false }
+        guard routeState.recordDeleteState.summary == nil else { return false }
+        guard case .timelineIdle = viewState.recordInteractionFocusState else { return false }
+        return timelineItems.contains { $0.recordID == recordID }
+    }
+
+    private func presentRecordEditor(editorType: RecordEditorType, mode: RecordEditorMode) {
+        dismissTransientFeedback()
+        clearRecordDeleteState()
+        isShowingFoodDiscardConfirmation = false
+        viewState.recordCellInteractionState = .idle
+        routeState.activeSheet = .recordEditor(
+            RecordEditorRouteState(editorType: editorType, mode: mode)
+        )
+
+        if let recordID = mode.recordID {
+            viewState.recordInteractionFocusState = .editing(recordID)
+        } else {
+            viewState.recordInteractionFocusState = .timelineIdle
+        }
+    }
+
+    private func openRecordEditor(for recordID: UUID) {
+        guard
+            let record = fetchEditableRecord(id: recordID),
+            let recordType = record.recordType,
+            let editorType = RecordEditorType(recordType: recordType)
+        else {
+            resetRecordInteractionState()
+            showMessageToast(missingRecordMessage())
+            return
+        }
+
+        prepareEditDraft(for: record, editorType: editorType)
+        presentRecordEditor(editorType: editorType, mode: .edit(recordID: recordID))
+    }
+
+    private func fetchEditableRecord(id: UUID) -> RecordItem? {
+        guard let recordRepository else { return nil }
+
+        do {
+            guard
+                let record = try recordRepository.fetchRecord(id: id),
+                let recordType = record.recordType,
+                RecordEditorType(recordType: recordType) != nil
+            else {
+                return nil
+            }
+
+            return record
+        } catch {
+            handlePersistenceError(
+                error,
+                logMessage: "Fetch editable record failed",
+                userMessage: missingRecordMessage()
+            )
+            return nil
+        }
+    }
+
+    private func prepareEditDraft(for record: RecordItem, editorType: RecordEditorType) {
+        switch editorType {
+        case .milk:
+            prepareMilkDraft(for: record)
+        case .diaper:
+            prepareDiaperDraft(for: record)
+        case .food:
+            prepareFoodDraft(for: record)
+        case .sleep:
+            prepareSleepEditDraft(for: record)
+        }
+    }
+
+    private func prepareMilkDraft(for record: RecordItem) {
+        milkDraft.populate(from: record)
+    }
+
+    private func prepareDiaperDraft(for record: RecordItem) {
+        diaperDraft.populate(from: record)
+    }
+
+    private func prepareFoodDraft(for record: RecordItem) {
+        let imagePath = normalizedFoodImagePath(record.imageURL)
+        foodDraft = FoodDraftState(
+            selectedTags: uniqueFoodTags(from: record.tags ?? []),
+            note: record.note?.trimmed ?? "",
+            selectedImagePath: imagePath
+        )
+        foodDraftTimestamp = record.timestamp
+        foodEditorSession = FoodEditorSession(
+            baseline: foodDraftSnapshot,
+            originalImagePath: imagePath
+        )
+        updateFirstTasteFoodTags()
+    }
+
+    private func prepareSleepEditDraft(for record: RecordItem) {
+        let startTime = record.timestamp
+        let duration = max(record.value ?? 0, 0)
+        let endTime = startTime.addingTimeInterval(duration)
+        sleepEditDraft = SleepRecordEditDraft(
+            startTime: startTime,
+            endTime: endTime,
+            originalStartTime: startTime,
+            originalEndTime: endTime
+        )
+    }
+
+    private func makeDeleteSummary(for record: RecordItem) -> RecordDeleteSummary {
+        let displayItem = formatter.makeDisplayItem(from: record)
+        return RecordDeleteSummary(
+            recordID: record.id,
+            title: displayItem?.title ?? formatter.defaultFeedingTitle(),
+            subtitle: displayItem?.subtitle,
+            timestamp: record.timestamp,
+            type: record.recordType ?? .milk
+        )
+    }
+
+    private func makeDeletedRecordSnapshot(from record: RecordItem) -> DeletedRecordSnapshot {
+        DeletedRecordSnapshot(
+            recordID: record.id,
+            timestamp: record.timestamp,
+            type: record.recordType ?? .milk,
+            value: record.value,
+            leftNursingSeconds: record.leftNursingSeconds,
+            rightNursingSeconds: record.rightNursingSeconds,
+            subType: record.subType,
+            imageURL: record.imageURL,
+            aiSummary: record.aiSummary,
+            tags: record.tags,
+            note: record.note,
+            message: deleteUndoMessage()
+        )
+    }
+
+    private func restoreDeletedRecord(from snapshot: DeletedRecordSnapshot, using repository: RecordRepository) throws -> RecordItem {
+        try repository.restoreDeletedRecord(from: recordRecoverySnapshot(from: snapshot))
+    }
+
+    private func isContextMenuTargeting(_ recordID: UUID) -> Bool {
+        guard case let .contextMenu(focusedRecordID) = viewState.recordInteractionFocusState else {
+            return false
+        }
+
+        return focusedRecordID == recordID
+    }
+
+    private func clearRecordDeleteState() {
+        routeState.recordDeleteState = .idle
+    }
+
+    private func resetRecordInteractionState() {
+        viewState.recordCellInteractionState = .idle
+        viewState.recordInteractionFocusState = .timelineIdle
+    }
+
+    private func dismissTransientFeedback() {
+        dismissMessageToast()
     }
 
     private func resetFoodDraft(removeStoredImage: Bool) {
-        if removeStoredImage {
+        if removeStoredImage, shouldRemoveFoodDraftImage(at: foodDraft.selectedImagePath) {
             FoodPhotoStorage.removeImage(at: foodDraft.selectedImagePath)
         }
         foodDraft = FoodDraftState()
+        foodDraftTimestamp = dateProvider()
+        foodEditorSession = FoodEditorSession.create(at: foodDraftTimestamp)
         viewState.firstTasteFoodTags = []
     }
 
-    private func showUndoToast(recordID: UUID, message: String) {
+    private func resetSleepEditDraft() {
+        let timestamp = dateProvider()
+        sleepEditDraft = SleepRecordEditDraft(startTime: timestamp, endTime: timestamp)
+    }
+
+    private var foodDraftSnapshot: FoodEditorDraftSnapshot {
+        FoodEditorDraftSnapshot(
+            tags: uniqueFoodTags(from: foodDraft.selectedTags),
+            note: foodDraft.note.trimmed,
+            imagePath: foodDraft.selectedImagePath?.trimmed.nilIfEmpty,
+            timestamp: foodDraftTimestamp
+        )
+    }
+
+    private func shouldRemoveFoodDraftImage(at path: String?) -> Bool {
+        guard let normalizedPath = path?.trimmed.nilIfEmpty else { return false }
+        return normalizedPath != foodEditorSession.originalImagePath
+    }
+
+    private func normalizedFoodImagePath(_ path: String?) -> String? {
+        path?.trimmed.nilIfEmpty
+    }
+
+    private func showCreateUndoToast(recordID: UUID, message: String) {
+        showUndoFeedback(.undoCreate(UndoToastState(recordID: recordID, message: message)))
+    }
+
+    private func showDeleteUndoToast(_ snapshot: DeletedRecordSnapshot) {
+        showUndoFeedback(.undoDelete(snapshot))
+    }
+
+    private func showUndoFeedback(_ feedback: RecordFeedbackState) {
+        guard let toast = feedback.undoToast else { return }
+
+        messageDismissTask?.cancel()
+        messageDismissTask = nil
+        viewState.messageToast = nil
+
         undoDismissTask?.cancel()
-        viewState.undoToast = UndoToastState(recordID: recordID, message: message)
+        viewState.recordFeedbackState = feedback
+        viewState.undoToast = toast
 
         undoDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard let self, !Task.isCancelled else { return }
-            self.viewState.undoToast = nil
+            self.dismissUndoToast()
         }
     }
 
     private func dismissUndoToast() {
         undoDismissTask?.cancel()
         undoDismissTask = nil
+        if case let .undoDelete(snapshot) = viewState.recordFeedbackState {
+            finalizeDeletedRecordSnapshot(snapshot)
+        }
         viewState.undoToast = nil
+        if case .undoCreate = viewState.recordFeedbackState {
+            viewState.recordFeedbackState = .none
+        } else if case .undoDelete = viewState.recordFeedbackState {
+            viewState.recordFeedbackState = .none
+        }
+    }
+
+    private func showMessageToast(_ message: String) {
+        if case let .message(currentMessage) = viewState.recordFeedbackState, currentMessage == message {
+            return
+        }
+
+        dismissUndoToast()
+        messageDismissTask?.cancel()
+        viewState.recordFeedbackState = .message(message)
+        viewState.messageToast = MessageToastState(message: message)
+
+        messageDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled else { return }
+            self.dismissMessageToast()
+        }
+    }
+
+    private func dismissMessageToast() {
+        messageDismissTask?.cancel()
+        messageDismissTask = nil
+        viewState.messageToast = nil
+        if case .message = viewState.recordFeedbackState {
+            viewState.recordFeedbackState = .none
+        }
+    }
+
+    private func editRecordSheetTitle() -> String {
+        L10n.text(
+            "home.record.editor.title",
+            service: localizationService,
+            en: "Edit record",
+            zh: "编辑记录"
+        )
+    }
+
+    private func saveRecordChangesTitle() -> String {
+        L10n.text(
+            "home.record.editor.save",
+            service: localizationService,
+            en: "Save changes",
+            zh: "保存修改"
+        )
+    }
+
+    private func missingRecordMessage() -> String {
+        L10n.text(
+            "home.record.error.missing",
+            service: localizationService,
+            en: "This record no longer exists.",
+            zh: "这条记录已不存在。"
+        )
+    }
+
+    private func editFailedMessage() -> String {
+        L10n.text(
+            "home.record.error.edit_failed",
+            service: localizationService,
+            en: "This edit couldn't be saved. Try again.",
+            zh: "这次修改没有保存成功，请再试一次。"
+        )
+    }
+
+    private func deleteFailedMessage() -> String {
+        L10n.text(
+            "home.record.error.delete_failed",
+            service: localizationService,
+            en: "This delete didn't complete. Try again.",
+            zh: "这次删除没有成功，请再试一次。"
+        )
+    }
+
+    private func undoFailedMessage() -> String {
+        L10n.text(
+            "home.record.error.undo_failed",
+            service: localizationService,
+            en: "This undo didn't complete. Try again.",
+            zh: "这次撤销没有成功，请再试一次。"
+        )
+    }
+
+    private func updatedRecordMessage() -> String {
+        L10n.text(
+            "home.record.updated",
+            service: localizationService,
+            en: "Record updated.",
+            zh: "已更新记录"
+        )
+    }
+
+    private func deleteUndoMessage() -> String {
+        L10n.text(
+            "home.record.deleted",
+            service: localizationService,
+            en: "Record deleted.",
+            zh: "已删除记录"
+        )
+    }
+
+    private func restoredRecordMessage() -> String {
+        L10n.text(
+            "home.record.restored",
+            service: localizationService,
+            en: "Record restored.",
+            zh: "已恢复记录"
+        )
+    }
+
+    private func recordRecoverySnapshot(from snapshot: DeletedRecordSnapshot) -> RecordRecoverySnapshot {
+        RecordRecoverySnapshot(
+            recordID: snapshot.recordID,
+            timestamp: snapshot.timestamp,
+            type: snapshot.type,
+            value: snapshot.value,
+            leftNursingSeconds: snapshot.leftNursingSeconds,
+            rightNursingSeconds: snapshot.rightNursingSeconds,
+            subType: snapshot.subType,
+            imageURL: snapshot.imageURL,
+            aiSummary: snapshot.aiSummary,
+            tags: snapshot.tags,
+            note: snapshot.note
+        )
+    }
+
+    private func finalizeDeletedRecordSnapshot(_ snapshot: DeletedRecordSnapshot) {
+        guard let recordRepository else { return }
+
+        do {
+            try recordRepository.finalizeDeletedRecord(recordRecoverySnapshot(from: snapshot))
+        } catch {
+            let errorDescription = String(describing: error)
+            AppLogger.persistence.error("Finalize deleted record failed: \(errorDescription, privacy: .public)")
+        }
+    }
+
+    private func handlePersistenceError(_ error: Error, logMessage: String, userMessage: String) {
+        let errorDescription = String(describing: error)
+        AppLogger.persistence.error("\(logMessage, privacy: .public): \(errorDescription, privacy: .public)")
+        showMessageToast(userMessage)
     }
 
     private func canonicalFoodTag(matching tag: String) -> String {
@@ -538,12 +1413,23 @@ extension HomeStore {
     }
 
     private func matchesFoodTagSearch(_ candidate: String, query: String) -> Bool {
-        candidate.range(
-            of: query,
-            options: [.caseInsensitive, .diacriticInsensitive],
-            range: nil,
-            locale: localizationService.locale
-        ) != nil
+        if foodTagCatalog.isEquivalentTag(candidate, query) {
+            return true
+        }
+
+        let canonicalQuery = foodTagCatalog.canonicalTag(for: query)
+        let queryCandidates = [query, canonicalQuery]
+            .map(\.trimmed)
+            .filter { !$0.isEmpty }
+
+        return queryCandidates.contains { searchTerm in
+            candidate.range(
+                of: searchTerm,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                range: nil,
+                locale: localizationService.locale
+            ) != nil
+        }
     }
 
     private func uniqueFoodTags(from tags: [String]) -> [String] {
@@ -589,5 +1475,11 @@ extension HomeStore {
             zh: "第一次尝试：%@",
             arguments: [localeFormatter.list(tags)]
         )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

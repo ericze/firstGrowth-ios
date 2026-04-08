@@ -11,7 +11,7 @@ struct BabyRepositoryTests {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
 
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
 
         let baby = repo.activeBaby
         #expect(baby != nil)
@@ -24,8 +24,8 @@ struct BabyRepositoryTests {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
 
-        repo.createDefaultIfNeeded()
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
+        #expect(repo.createDefaultIfNeeded() == true)
 
         let descriptor = FetchDescriptor<BabyProfile>()
         let babies = try env.modelContext.fetch(descriptor)
@@ -36,9 +36,9 @@ struct BabyRepositoryTests {
     func testUpdateName() async throws {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
 
-        repo.updateName("小花生")
+        #expect(repo.updateName("小花生") == true)
 
         #expect(repo.activeBaby?.name == "小花生")
     }
@@ -47,10 +47,10 @@ struct BabyRepositoryTests {
     func testUpdateBirthDate() async throws {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
 
         let newDate = Date(timeIntervalSinceNow: -86400 * 100)
-        repo.updateBirthDate(newDate)
+        #expect(repo.updateBirthDate(newDate) == true)
 
         #expect(repo.activeBaby?.birthDate == newDate)
     }
@@ -59,12 +59,12 @@ struct BabyRepositoryTests {
     func testUpdateGender() async throws {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
 
-        repo.updateGender(.male)
+        #expect(repo.updateGender(.male) == true)
         #expect(repo.activeBaby?.gender == .male)
 
-        repo.updateGender(nil)
+        #expect(repo.updateGender(nil) == true)
         #expect(repo.activeBaby?.gender == nil)
     }
 
@@ -81,10 +81,10 @@ struct BabyRepositoryTests {
         let env = try makeTestEnvironment(now: .now)
         let state = ActiveBabyState()
         let repo = env.makeBabyRepository(activeBabyState: state)
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
         state.updateFrom(repo.activeBaby)
 
-        repo.updateName("小花生")
+        #expect(repo.updateName("小花生") == true)
 
         #expect(state.headerConfig.babyName == "小花生")
     }
@@ -94,11 +94,11 @@ struct BabyRepositoryTests {
         let env = try makeTestEnvironment(now: .now)
         let state = ActiveBabyState()
         let repo = env.makeBabyRepository(activeBabyState: state)
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
         state.updateFrom(repo.activeBaby)
 
         let newDate = Date(timeIntervalSinceNow: -86400 * 200)
-        repo.updateBirthDate(newDate)
+        #expect(repo.updateBirthDate(newDate) == true)
 
         #expect(state.headerConfig.birthDate == newDate)
     }
@@ -108,11 +108,11 @@ struct BabyRepositoryTests {
         let env = try makeTestEnvironment(now: .now)
         let state = ActiveBabyState()
         let repo = env.makeBabyRepository(activeBabyState: state)
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
         state.updateFrom(repo.activeBaby)
 
         let originalName = state.headerConfig.babyName
-        repo.updateGender(.male)
+        #expect(repo.updateGender(.male) == true)
 
         #expect(state.headerConfig.babyName == originalName)
     }
@@ -121,9 +121,9 @@ struct BabyRepositoryTests {
     func testUpdateNameWithoutState() async throws {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
 
-        repo.updateName("安全测试")
+        #expect(repo.updateName("安全测试") == true)
         #expect(repo.activeBaby?.name == "安全测试")
     }
 
@@ -131,10 +131,21 @@ struct BabyRepositoryTests {
     func testMarkOnboardingCompleted() async throws {
         let env = try makeTestEnvironment(now: .now)
         let repo = env.makeBabyRepository()
-        repo.createDefaultIfNeeded()
+        #expect(repo.createDefaultIfNeeded() == true)
 
-        repo.markOnboardingCompleted()
+        #expect(repo.markOnboardingCompleted() == true)
 
         #expect(repo.activeBaby?.hasCompletedOnboarding == true)
+    }
+
+    @Test("update methods fail safely when no active baby exists")
+    func testUpdateMethodsFailWhenNoActiveBaby() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+
+        #expect(repo.updateName("Noop") == false)
+        #expect(repo.updateBirthDate(.now) == false)
+        #expect(repo.updateGender(.female) == false)
+        #expect(repo.markOnboardingCompleted() == false)
     }
 }

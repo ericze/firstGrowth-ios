@@ -55,6 +55,7 @@ struct FeedingDraftState {
     static let bottleMinimum = 0
     static let bottleMaximum = 300
     static let bottleStep = 10
+    static let nursingAdjustmentStep = 30
 
     var selectedTab: MilkTab = .nursing
     var leftAccumulatedSeconds: Int = 0
@@ -62,6 +63,7 @@ struct FeedingDraftState {
     var activeSide: NursingSide?
     var activeStartDate: Date?
     var bottleAmountMl: Int = 0
+    var recordedAt: Date = .now
 
     var selectedBottlePreset: Int? {
         Self.presets.contains(bottleAmountMl) ? bottleAmountMl : nil
@@ -125,6 +127,29 @@ struct FeedingDraftState {
         bottleAmountMl = min(max(preset, Self.bottleMinimum), Self.bottleMaximum)
     }
 
+    mutating func adjustNursingDuration(for side: NursingSide, deltaSeconds: Int) {
+        switch side {
+        case .left:
+            leftAccumulatedSeconds = max(leftAccumulatedSeconds + deltaSeconds, 0)
+        case .right:
+            rightAccumulatedSeconds = max(rightAccumulatedSeconds + deltaSeconds, 0)
+        }
+    }
+
+    mutating func setRecordedAt(_ date: Date) {
+        recordedAt = date
+    }
+
+    mutating func populate(from record: RecordItem) {
+        selectedTab = record.totalNursingSeconds > 0 ? .nursing : .bottle
+        leftAccumulatedSeconds = max(record.leftNursingSeconds, 0)
+        rightAccumulatedSeconds = max(record.rightNursingSeconds, 0)
+        activeSide = nil
+        activeStartDate = nil
+        bottleAmountMl = record.bottleAmountMl
+        recordedAt = record.timestamp
+    }
+
     mutating func increaseBottle() {
         bottleAmountMl = min(bottleAmountMl + Self.bottleStep, Self.bottleMaximum)
     }
@@ -133,11 +158,37 @@ struct FeedingDraftState {
         bottleAmountMl = max(bottleAmountMl - Self.bottleStep, Self.bottleMinimum)
     }
 
-    mutating func reset() {
-        self = FeedingDraftState()
+    mutating func reset(now: Date = .now) {
+        self = FeedingDraftState(recordedAt: now)
     }
 
     func floorMinutes(_ seconds: Int) -> Int {
         max(0, seconds / 60)
+    }
+}
+
+struct DiaperDraftState {
+    var selectedSubtype: DiaperSubtype?
+    var recordedAt: Date = .now
+
+    var canSubmit: Bool {
+        selectedSubtype != nil
+    }
+
+    mutating func selectSubtype(_ subtype: DiaperSubtype) {
+        selectedSubtype = subtype
+    }
+
+    mutating func setRecordedAt(_ date: Date) {
+        recordedAt = date
+    }
+
+    mutating func populate(from record: RecordItem) {
+        selectedSubtype = record.diaperType
+        recordedAt = record.timestamp
+    }
+
+    mutating func reset(now: Date = .now) {
+        self = DiaperDraftState(recordedAt: now)
     }
 }
