@@ -6,7 +6,7 @@ import Observation
 @MainActor @Observable
 final class SubscriptionManager {
     private let provider: ProductProvider
-    private let cache: SubscriptionCache
+    private var cache: SubscriptionCache
     private var transactionListenerTask: Task<Void, Never>?
 
     var subscriptionStatus: SubscriptionStatus = .loading

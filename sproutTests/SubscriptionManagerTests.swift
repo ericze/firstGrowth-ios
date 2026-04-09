@@ -1,0 +1,127 @@
+import XCTest
+@testable import sprout
+
+@MainActor
+final class SubscriptionManagerTests: XCTestCase {
+    private var provider: MockProductProvider!
+    private var cache: MockSubscriptionCache!
+    private var manager: SubscriptionManager!
+
+    override func setUp() {
+        provider = MockProductProvider()
+        cache = MockSubscriptionCache()
+        manager = SubscriptionManager(provider: provider, cache: cache)
+    }
+
+    func test_initialState_isLoading() {
+        XCTAssertTrue(manager.subscriptionStatus == .loading)
+    }
+
+    func test_initialState_isPro_isFalse() {
+        XCTAssertFalse(manager.isPro)
+    }
+
+    func test_notSubscribed_isPro_returnsFalse() async {
+        provider.mockEntitlements = []
+        await manager.refreshStatus()
+        XCTAssertFalse(manager.isPro)
+        XCTAssertEqual(manager.subscriptionStatus, .notSubscribed)
+    }
+
+    func test_notSubscribed_clearsCache() async {
+        cache.cachedIsActive = true
+        provider.mockEntitlements = []
+        await manager.refreshStatus()
+        XCTAssertFalse(cache.cachedIsActive)
+    }
+
+    func test_emptyEntitlements_notSubscribed() async {
+        cache.cachedProductID = ProductID.monthly
+        cache.cachedExpiration = Date().addingTimeInterval(86400 * 30)
+        cache.cachedIsActive = true
+        provider.mockEntitlements = []
+        await manager.refreshStatus()
+        XCTAssertEqual(manager.subscriptionStatus, .notSubscribed)
+    }
+
+    func test_storeKitError_fallsBackToCache() async {
+        cache.cachedProductID = ProductID.monthly
+        cache.cachedExpiration = Date().addingTimeInterval(86400 * 30)
+        cache.cachedIsActive = true
+        provider.shouldThrow = true
+        await manager.refreshStatus()
+        XCTAssertTrue(manager.isPro)
+        if case .subscribed(let productID, _) = manager.subscriptionStatus {
+            XCTAssertEqual(productID, ProductID.monthly)
+        } else {
+            XCTFail("Expected subscribed status from cache")
+        }
+    }
+
+    func test_storeKitError_noCache_returnsError() async {
+        provider.shouldThrow = true
+        await manager.refreshStatus()
+        XCTAssertFalse(manager.isPro)
+        if case .error = manager.subscriptionStatus {
+            // Expected
+        } else {
+            XCTFail("Expected error status")
+        }
+    }
+
+    func test_isEntitled_whenNotPro_returnsFalse() async {
+        provider.mockEntitlements = []
+        await manager.refreshStatus()
+        XCTAssertFalse(manager.isEntitled(.cloudSync))
+        XCTAssertFalse(manager.isEntitled(.familyGroup))
+    }
+
+    func test_isEntitled_whenPro_returnsTrue() {
+        manager.subscriptionStatus = .subscribed(
+            productID: ProductID.monthly,
+            expiration: Date().addingTimeInterval(86400 * 30)
+        )
+        for entitlement in Entitlement.allCases {
+            XCTAssertTrue(manager.isEntitled(entitlement))
+        }
+    }
+
+    func test_subscribed_isPro_returnsTrue() {
+        manager.subscriptionStatus = .subscribed(
+            productID: ProductID.monthly,
+            expiration: Date().addingTimeInterval(86400 * 30)
+        )
+        XCTAssertTrue(manager.isPro)
+    }
+
+    func test_expired_isPro_returnsFalse() {
+        manager.subscriptionStatus = .expired(gracePeriodEnds: nil)
+        XCTAssertFalse(manager.isPro)
+    }
+
+    func test_error_isPro_returnsFalse() {
+        manager.subscriptionStatus = .error("test error")
+        XCTAssertFalse(manager.isPro)
+    }
+
+    func test_loadProducts_setsIsLoading_false() async {
+        await manager.loadProducts()
+        XCTAssertFalse(manager.isLoading)
+    }
+
+    func test_restorePurchases_callsProvider() async {
+        await manager.restorePurchases()
+        XCTAssertTrue(provider.didRestore)
+    }
+
+    func test_cache_readWrite() {
+        cache.cachedProductID = ProductID.yearly
+        cache.cachedExpiration = Date().addingTimeInterval(86400 * 365)
+        cache.cachedIsActive = true
+        XCTAssertEqual(cache.cachedProductID, ProductID.yearly)
+        XCTAssertTrue(cache.cachedIsActive)
+        cache.clear()
+        XCTAssertNil(cache.cachedProductID)
+        XCTAssertFalse(cache.cachedIsActive)
+    }
+}
