@@ -232,6 +232,7 @@ struct UndoToastState: Equatable {
 struct HomeHeaderConfig: Equatable {
     var babyName: String
     var birthDate: Date
+    var avatarPath: String?
 
     static let placeholder = HomeHeaderConfig(
         babyName: L10n.text("common.baby.placeholder", en: "Baby", zh: "宝宝"),
@@ -240,6 +241,6 @@ struct HomeHeaderConfig: Equatable {
 
     static func from(_ baby: BabyProfile?) -> HomeHeaderConfig {
         guard let baby else { return .placeholder }
-        return HomeHeaderConfig(babyName: baby.name, birthDate: baby.birthDate)
+        return HomeHeaderConfig(babyName: baby.name, birthDate: baby.birthDate, avatarPath: baby.avatarPath)
     }
 }

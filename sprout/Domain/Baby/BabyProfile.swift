@@ -7,6 +7,7 @@ final class BabyProfile {
     var birthDate: Date
     var gender: Gender?
     var createdAt: Date
+    var avatarPath: String?
     var isActive: Bool
     var hasCompletedOnboarding: Bool
 

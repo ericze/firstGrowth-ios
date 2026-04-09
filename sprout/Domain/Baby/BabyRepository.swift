@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import SwiftData
+import UIKit
 
 @MainActor
 final class BabyRepository {
@@ -88,6 +89,46 @@ final class BabyRepository {
     }
 
     @discardableResult
+    func updateAvatar(_ image: UIImage?) -> Bool {
+        do {
+            guard let baby = try fetchActiveBaby() else {
+                recordFailure(operation: "Update baby avatar", reason: "No active baby found")
+                return false
+            }
+
+            let oldPath = baby.avatarPath
+
+            if let image {
+                let resized = Self.resizeImage(image, maxDimension: 512)
+                guard let data = resized.jpegData(compressionQuality: 0.8) else {
+                    recordFailure(operation: "Update baby avatar", reason: "JPEG encoding failed")
+                    return false
+                }
+
+                try ensureAvatarDirectory()
+                let fileName = "avatar-\(UUID().uuidString).jpg"
+                let fileURL = avatarDirectoryURL.appendingPathComponent(fileName)
+                try data.write(to: fileURL, options: .atomic)
+                baby.avatarPath = fileURL.path
+            } else {
+                baby.avatarPath = nil
+            }
+
+            try modelContext.save()
+
+            if let oldPath {
+                deleteAvatarFile(at: oldPath)
+            }
+
+            activeBabyState?.updateFrom(baby)
+            return true
+        } catch {
+            recordFailure(operation: "Update baby avatar", error: error)
+            return false
+        }
+    }
+
+    @discardableResult
     func markOnboardingCompleted() -> Bool {
         do {
             guard let baby = try fetchActiveBaby() else {
@@ -117,5 +158,42 @@ final class BabyRepository {
 
     private func recordFailure(operation: String, reason: String) {
         logger.error("\(operation, privacy: .public) failed: \(reason, privacy: .public)")
+    }
+
+    private var avatarDirectoryURL: URL {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return root.appendingPathComponent("BabyAvatars", isDirectory: true)
+    }
+
+    private func ensureAvatarDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: avatarDirectoryURL,
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func deleteAvatarFile(at path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            if FileManager.default.fileExists(atPath: trimmed) {
+                try FileManager.default.removeItem(atPath: trimmed)
+            }
+        } catch {
+            logger.error("Failed deleting old avatar: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private static func resizeImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        guard size.width > maxDimension || size.height > maxDimension else { return image }
+
+        let scale = min(maxDimension / size.width, maxDimension / size.height)
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }

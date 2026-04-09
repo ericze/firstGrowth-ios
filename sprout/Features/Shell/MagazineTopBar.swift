@@ -3,6 +3,7 @@ import SwiftUI
 struct MagazineTopBar: View {
     let selectedTab: HomeModule
     let babyName: String
+    let avatarPath: String?
     let onSelect: (HomeModule) -> Void
     let onAvatarTap: () -> Void
 
@@ -63,17 +64,12 @@ struct MagazineTopBar: View {
     }
 
     private var avatarMark: some View {
-        Text(monogram)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(AppTheme.Colors.primaryText)
-            .frame(width: 32, height: 32)
-            .background(AppTheme.Colors.cardBackground)
-            .overlay {
-                Circle()
-                    .stroke(AppTheme.Colors.divider, lineWidth: 1)
-            }
-            .clipShape(Circle())
-            .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+        BabyAvatarView(
+            avatarPath: avatarPath,
+            monogram: monogram,
+            size: 32
+        )
+        .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
     }
 
     private var monogram: String {

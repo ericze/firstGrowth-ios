@@ -1,4 +1,6 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 struct BabyProfileView: View {
     let babyRepository: BabyRepository
@@ -7,8 +9,15 @@ struct BabyProfileView: View {
     @State private var name: String = ""
     @State private var birthDate: Date = .now
     @State private var gender: BabyProfile.Gender?
+    @State private var avatarPath: String?
     @State private var saveErrorMessage: String?
     @State private var errorDismissTask: Task<Void, Never>?
+
+    @State private var isShowingAvatarSourcePicker = false
+    @State private var isShowingLibraryPicker = false
+    @State private var isShowingCamera = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var capturedImage: UIImage?
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -37,6 +46,63 @@ struct BabyProfileView: View {
                     .foregroundStyle(AppTheme.Colors.primaryText)
             }
         }
+        .confirmationDialog(
+            String(localized: "profile.avatar.change_title"),
+            isPresented: $isShowingAvatarSourcePicker
+        ) {
+            Button(String(localized: "profile.avatar.album")) {
+                isShowingLibraryPicker = true
+            }
+
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button(String(localized: "profile.avatar.camera")) {
+                    isShowingCamera = true
+                }
+            }
+
+            if avatarPath != nil {
+                Button(String(localized: "profile.avatar.remove"), role: .destructive) {
+                    guard babyRepository.updateAvatar(nil) else {
+                        showSaveError()
+                        return
+                    }
+                    avatarPath = nil
+                    AppHaptics.lightImpact()
+                }
+            }
+        }
+        .photosPicker(
+            isPresented: $isShowingLibraryPicker,
+            selection: $selectedPhotoItem,
+            matching: .images
+        )
+        .sheet(isPresented: $isShowingCamera) {
+            SystemImagePicker(image: $capturedImage, sourceType: .camera)
+        }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                guard let data = try await newItem.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data) else { return }
+                guard babyRepository.updateAvatar(image) else {
+                    showSaveError()
+                    return
+                }
+                avatarPath = babyRepository.activeBaby?.avatarPath
+                selectedPhotoItem = nil
+                AppHaptics.lightImpact()
+            }
+        }
+        .onChange(of: capturedImage) { _, newImage in
+            guard let newImage else { return }
+            guard babyRepository.updateAvatar(newImage) else {
+                showSaveError()
+                return
+            }
+            avatarPath = babyRepository.activeBaby?.avatarPath
+            capturedImage = nil
+            AppHaptics.lightImpact()
+        }
         .onAppear {
             loadFromRepository()
         }
@@ -47,24 +113,32 @@ struct BabyProfileView: View {
     }
 
     private var avatarSection: some View {
-        VStack(spacing: 12) {
-            Text(monogram)
-                .font(.system(size: 32, weight: .semibold))
-                .foregroundStyle(AppTheme.Colors.primaryText)
-                .frame(width: 80, height: 80)
-                .background(AppTheme.Colors.cardBackground)
-                .overlay {
-                    Circle()
-                        .stroke(AppTheme.Colors.divider, lineWidth: 1)
-                }
-                .clipShape(Circle())
+        Button(action: {
+            AppHaptics.selection()
+            isShowingAvatarSourcePicker = true
+        }) {
+            VStack(spacing: 12) {
+                ZStack(alignment: .bottomTrailing) {
+                    BabyAvatarView(
+                        avatarPath: avatarPath,
+                        monogram: monogram,
+                        size: 80
+                    )
 
-            Text(String(localized: "shell.profile.avatar.hint"))
-                .font(AppTheme.Typography.meta)
-                .foregroundStyle(AppTheme.Colors.tertiaryText)
+                    Image(systemName: "pencil.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(AppTheme.Colors.accent)
+                        .background(Circle().fill(AppTheme.Colors.cardBackground))
+                }
+
+                Text(String(localized: "shell.profile.avatar.hint"))
+                    .font(AppTheme.Typography.meta)
+                    .foregroundStyle(AppTheme.Colors.tertiaryText)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
     }
 
     private var formSection: some View {
@@ -206,11 +280,7 @@ struct BabyProfileView: View {
     }
 
     private func showSaveError() {
-        saveErrorMessage = L10n.text(
-            "shell.profile.save_error",
-            en: "Changes could not be saved. Please try again.",
-            zh: "未能保存更改，请稍后再试。"
-        )
+        saveErrorMessage = String(localized: "shell.profile.save_error")
         scheduleErrorDismiss()
     }
 
@@ -238,5 +308,6 @@ struct BabyProfileView: View {
         name = baby.name
         birthDate = baby.birthDate
         gender = baby.gender
+        avatarPath = baby.avatarPath
     }
 }
