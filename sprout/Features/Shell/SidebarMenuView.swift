@@ -3,7 +3,6 @@ import SwiftUI
 
 struct SidebarMenuView: View {
     let headerConfig: HomeHeaderConfig
-    let onHeaderTap: () -> Void
     let onNavigate: (SidebarRoute) -> Void
 
     private let calendar = Calendar.current
@@ -29,20 +28,15 @@ struct SidebarMenuView: View {
     private var headerCard: some View {
         Button(action: {
             AppHaptics.selection()
-            onHeaderTap()
+            onNavigate(.babyProfile)
         }) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center, spacing: 14) {
-                    Text(monogram)
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(AppTheme.Colors.primaryText)
-                        .frame(width: 56, height: 56)
-                        .background(AppTheme.Colors.cardBackground)
-                        .overlay {
-                            Circle()
-                                .stroke(AppTheme.Colors.divider, lineWidth: 1)
-                        }
-                        .clipShape(Circle())
+                    BabyAvatarView(
+                        avatarPath: headerConfig.avatarPath,
+                        monogram: monogram,
+                        size: 56
+                    )
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text(headerConfig.babyName)
@@ -105,15 +99,23 @@ struct SidebarMenuView: View {
                     AppHaptics.selection()
                     onNavigate(item.route)
                 }) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(item.title)
-                            .font(AppTheme.Typography.cardTitle)
-                            .foregroundStyle(AppTheme.Colors.primaryText)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(item.title)
+                                .font(AppTheme.Typography.cardTitle)
+                                .foregroundStyle(AppTheme.Colors.primaryText)
 
-                        Text(item.detail)
-                            .font(AppTheme.Typography.cardBody)
-                            .foregroundStyle(AppTheme.Colors.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+                            Text(item.detail)
+                                .font(AppTheme.Typography.cardBody)
+                                .foregroundStyle(AppTheme.Colors.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer()
+
+                        if item.isPro {
+                            ProBadgeView(showLock: true)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 18)
