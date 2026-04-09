@@ -4,9 +4,9 @@ import Testing
 @MainActor
 struct SidebarRoutingTests {
 
-    @Test("V1 sidebar contains exactly 1 item: language")
+    @Test("sidebar contains 3 items: language, cloudSync, familyGroup")
     func testItemCount() {
-        #expect(SidebarIndexItem.items.count == 1)
+        #expect(SidebarIndexItem.items.count == 3)
     }
 
     @Test("all items have valid, non-nil routes")
@@ -20,14 +20,14 @@ struct SidebarRoutingTests {
     func testExpectedIDs() {
         let ids = Set(SidebarIndexItem.items.map(\.id))
         #expect(ids.contains("language"))
+        #expect(ids.contains("cloudSync"))
+        #expect(ids.contains("familyGroup"))
     }
 
-    @Test("removed items are absent from V1")
+    @Test("removed items are absent")
     func testRemovedItems() {
         let ids = SidebarIndexItem.items.map(\.id)
         #expect(!ids.contains("profile"))
-        #expect(!ids.contains("cloud"))
-        #expect(!ids.contains("family"))
         #expect(!ids.contains("rhythm"))
     }
 
