@@ -66,7 +66,22 @@ struct ContentView: View {
                 let engine = SyncEngine(
                     modelContext: modelContext,
                     supabaseService: supabaseService,
-                    currentUserIDProvider: { authManager?.currentUser?.id }
+                    currentUserIDProvider: { authManager?.currentUser?.id },
+                    onMemoryPulled: { [modelContext] weekStart in
+                        let treasureRepo = TreasureRepository(modelContext: modelContext)
+                        let composer = WeeklyLetterComposer()
+                        do {
+                            try treasureRepo.syncWeeklyLetter(
+                                for: weekStart,
+                                composer: composer,
+                                generatedAt: Date()
+                            )
+                        } catch {
+                            AppLogger.startup.error(
+                                "Weekly letter recompute failed: \(String(describing: error), privacy: .public)"
+                            )
+                        }
+                    }
                 )
                 syncEngine = engine
                 cloudSyncStatusStore.configure(syncEngine: engine)

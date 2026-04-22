@@ -608,6 +608,503 @@ struct SyncEngineTests {
         #expect(fetchedRecord?.remoteVersion == 7)
     }
 
+    // MARK: - Task 3: Soft-delete apply and dirty-row protection for MemoryEntry
+
+    @Test("pull removes local rows when remote deleted_at is set")
+    func pullRemovesLocalRowsOnSoftDelete() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_700_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+        let recordID = UUID()
+        let memoryID = UUID()
+
+        // Create local synced rows that will be soft-deleted by the remote.
+        let localRecord = RecordItem(
+            id: recordID,
+            babyID: babyID,
+            timestamp: serverNow.addingTimeInterval(-200),
+            type: RecordType.food.rawValue,
+            value: 80,
+            remoteVersion: 3,
+            syncStateRaw: SyncState.synced.rawValue
+        )
+        let localMemory = MemoryEntry(
+            id: memoryID,
+            babyID: babyID,
+            createdAt: serverNow.addingTimeInterval(-300),
+            ageInDays: 42,
+            note: "will be deleted",
+            isMilestone: false,
+            remoteVersion: 5,
+            syncStateRaw: SyncState.synced.rawValue
+        )
+        environment.modelContext.insert(localRecord)
+        environment.modelContext.insert(localMemory)
+        try environment.modelContext.save()
+
+        // Remote rows with deletedAt set.
+        let deletedRecord = RecordItemDTO(
+            id: recordID,
+            userID: userID,
+            babyID: babyID,
+            type: RecordType.food.rawValue,
+            timestamp: serverNow.addingTimeInterval(-200),
+            value: 80,
+            leftNursingSeconds: 0,
+            rightNursingSeconds: 0,
+            subType: nil,
+            imageStoragePath: nil,
+            aiSummary: nil,
+            tags: nil,
+            note: "will be deleted",
+            createdAt: serverNow.addingTimeInterval(-200),
+            updatedAt: serverNow.addingTimeInterval(-10),
+            version: 4,
+            deletedAt: serverNow.addingTimeInterval(-5)
+        )
+        let deletedMemory = MemoryEntryDTO(
+            id: memoryID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: serverNow.addingTimeInterval(-300),
+            ageInDays: 42,
+            imageStoragePaths: [],
+            note: "will be deleted",
+            isMilestone: false,
+            updatedAt: serverNow.addingTimeInterval(-10),
+            version: 6,
+            deletedAt: serverNow.addingTimeInterval(-5)
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            recordItems: [recordID: deletedRecord],
+            memoryEntries: [memoryID: deletedMemory]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        // Both local rows should be removed.
+        #expect(try fetchRecord(id: recordID, in: environment.modelContext) == nil)
+        #expect(try fetchMemory(id: memoryID, in: environment.modelContext) == nil)
+
+        // Cursor should still be saved since apply succeeded.
+        let cursor = cursorStore.load(for: userID)
+        #expect(cursor.recordItemsAt != nil)
+        #expect(cursor.memoryEntriesAt != nil)
+    }
+
+    @Test("pull does not overwrite local pendingUpsert MemoryEntry rows")
+    func pullSkipsDirtyMemoryEntry() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_750_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+        let memoryID = UUID()
+
+        // Create a dirty local memory entry (pendingUpsert).
+        let localMemory = MemoryEntry(
+            id: memoryID,
+            babyID: babyID,
+            createdAt: serverNow.addingTimeInterval(-300),
+            ageInDays: 30,
+            note: "local note",
+            isMilestone: true,
+            syncStateRaw: SyncState.pendingUpsert.rawValue
+        )
+        environment.modelContext.insert(localMemory)
+        try environment.modelContext.save()
+
+        // Remote has a different version of the same entry.
+        let remoteMemory = MemoryEntryDTO(
+            id: memoryID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: serverNow.addingTimeInterval(-300),
+            ageInDays: 30,
+            imageStoragePaths: [],
+            note: "remote note",
+            isMilestone: false,
+            updatedAt: serverNow.addingTimeInterval(-10),
+            version: 8,
+            deletedAt: nil
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            memoryEntries: [memoryID: remoteMemory]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        // Push sends local values, then pull brings them back. Local values survive.
+        let fetchedMemory = try fetchMemory(id: memoryID, in: environment.modelContext)
+        #expect(fetchedMemory != nil)
+        #expect(fetchedMemory?.note == "local note")
+        #expect(fetchedMemory?.isMilestone == true)
+        #expect(fetchedMemory?.syncState == .synced)
+    }
+
+    @Test("pull does not overwrite local pendingUpsert BabyProfile rows")
+    func pullSkipsDirtyBabyProfile() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_800_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+
+        // Create a dirty local baby profile.
+        let localBaby = BabyProfile(
+            id: babyID,
+            name: "LocalBaby",
+            birthDate: Date(timeIntervalSince1970: 1_700_000_000),
+            syncStateRaw: SyncState.pendingUpsert.rawValue
+        )
+        environment.modelContext.insert(localBaby)
+        try environment.modelContext.save()
+
+        // Remote has a different version.
+        let remoteBaby = BabyProfileDTO(
+            id: babyID,
+            userID: userID,
+            name: "RemoteBaby",
+            birthDate: Date(timeIntervalSince1970: 1_690_000_000),
+            gender: nil,
+            avatarStoragePath: nil,
+            isActive: true,
+            hasCompletedOnboarding: true,
+            createdAt: serverNow.addingTimeInterval(-500),
+            updatedAt: serverNow.addingTimeInterval(-10),
+            version: 3,
+            deletedAt: nil
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            babyProfiles: [babyID: remoteBaby]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        // Push sends local values first, then pull brings back the same values.
+        let fetchedBaby = try fetchBaby(id: babyID, in: environment.modelContext)
+        #expect(fetchedBaby != nil)
+        #expect(fetchedBaby?.name == "LocalBaby")
+        #expect(fetchedBaby?.syncState == .synced)
+    }
+
+    @Test("pull calls onMemoryPulled for each affected week start")
+    func pullCallsOnMemoryPulledCallback() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_850_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+        let memoryID = UUID()
+
+        // Use a known date so we can compute its week start.
+        // 2024-03-20 is a Wednesday. With Monday-first week, week start = 2024-03-18.
+        let memoryDate = Date(timeIntervalSince1970: 1_710_921_600) // 2024-03-20 16:00 UTC
+
+        let remoteMemory = MemoryEntryDTO(
+            id: memoryID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: memoryDate,
+            ageInDays: 15,
+            imageStoragePaths: [],
+            note: "pulled memory",
+            isMilestone: false,
+            updatedAt: serverNow.addingTimeInterval(-30),
+            version: 2,
+            deletedAt: nil
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            memoryEntries: [memoryID: remoteMemory]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        var receivedWeekStarts: [Date] = []
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore,
+            onMemoryPulled: { weekStart in
+                receivedWeekStarts.append(weekStart)
+            }
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        let pulledMemory = try fetchMemory(id: memoryID, in: environment.modelContext)
+        #expect(pulledMemory != nil)
+        #expect(pulledMemory?.note == "pulled memory")
+        #expect(pulledMemory?.syncState == .synced)
+
+        // The callback should have been called exactly once with the correct week start.
+        #expect(receivedWeekStarts.count == 1)
+
+        let calendar = Calendar(identifier: .gregorian)
+        let expectedWeekStart = calendar.date(
+            from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: memoryDate)
+        )!
+        #expect(receivedWeekStarts.first == expectedWeekStart)
+    }
+
+    @Test("pull calls onMemoryPulled when remote memory is soft-deleted")
+    func pullCallsOnMemoryPulledOnSoftDelete() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_900_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+        let memoryID = UUID()
+
+        let memoryDate = Date(timeIntervalSince1970: 1_710_921_600)
+
+        // Create a local synced memory that will be deleted by remote.
+        let localMemory = MemoryEntry(
+            id: memoryID,
+            babyID: babyID,
+            createdAt: memoryDate,
+            ageInDays: 15,
+            note: "existing memory",
+            isMilestone: false,
+            remoteVersion: 2,
+            syncStateRaw: SyncState.synced.rawValue
+        )
+        environment.modelContext.insert(localMemory)
+        try environment.modelContext.save()
+
+        let deletedMemory = MemoryEntryDTO(
+            id: memoryID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: memoryDate,
+            ageInDays: 15,
+            imageStoragePaths: [],
+            note: "existing memory",
+            isMilestone: false,
+            updatedAt: serverNow.addingTimeInterval(-5),
+            version: 3,
+            deletedAt: serverNow.addingTimeInterval(-5)
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            memoryEntries: [memoryID: deletedMemory]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        var receivedWeekStarts: [Date] = []
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore,
+            onMemoryPulled: { weekStart in
+                receivedWeekStarts.append(weekStart)
+            }
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        // Local row should be deleted.
+        #expect(try fetchMemory(id: memoryID, in: environment.modelContext) == nil)
+
+        // Callback should fire for the deleted memory's week.
+        #expect(receivedWeekStarts.count == 1)
+
+        let calendar = Calendar(identifier: .gregorian)
+        let expectedWeekStart = calendar.date(
+            from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: memoryDate)
+        )!
+        #expect(receivedWeekStarts.first == expectedWeekStart)
+    }
+
+    @Test("pull coalesces memory entries in the same week into one callback")
+    func pullCoalescesSameWeekMemories() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_950_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+        let memory1ID = UUID()
+        let memory2ID = UUID()
+
+        let memoryDate1 = Date(timeIntervalSince1970: 1_710_921_600) // 2024-03-20
+        let memoryDate2 = Date(timeIntervalSince1970: 1_711_008_000) // 2024-03-21 (same week)
+
+        let remoteMemory1 = MemoryEntryDTO(
+            id: memory1ID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: memoryDate1,
+            ageInDays: 15,
+            imageStoragePaths: [],
+            note: "memory 1",
+            isMilestone: false,
+            updatedAt: serverNow.addingTimeInterval(-30),
+            version: 1,
+            deletedAt: nil
+        )
+        let remoteMemory2 = MemoryEntryDTO(
+            id: memory2ID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: memoryDate2,
+            ageInDays: 16,
+            imageStoragePaths: [],
+            note: "memory 2",
+            isMilestone: true,
+            updatedAt: serverNow.addingTimeInterval(-20),
+            version: 1,
+            deletedAt: nil
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            memoryEntries: [memory1ID: remoteMemory1, memory2ID: remoteMemory2]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        var receivedWeekStarts: [Date] = []
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore,
+            onMemoryPulled: { weekStart in
+                receivedWeekStarts.append(weekStart)
+            }
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        #expect(try fetchMemory(id: memory1ID, in: environment.modelContext) != nil)
+        #expect(try fetchMemory(id: memory2ID, in: environment.modelContext) != nil)
+
+        // Both memories are in the same week, so callback fires exactly once.
+        #expect(receivedWeekStarts.count == 1)
+
+        let calendar = Calendar(identifier: .gregorian)
+        let expectedWeekStart = calendar.date(
+            from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: memoryDate1)
+        )!
+        #expect(receivedWeekStarts.first == expectedWeekStart)
+    }
+
+    @Test("pull does not call onMemoryPulled for skipped dirty rows")
+    func pullDoesNotCallbackForSkippedDirtyMemories() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_711_000_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let babyID = UUID()
+        let memoryID = UUID()
+
+        let memoryDate = Date(timeIntervalSince1970: 1_710_921_600)
+
+        // Dirty local memory.
+        let localMemory = MemoryEntry(
+            id: memoryID,
+            babyID: babyID,
+            createdAt: memoryDate,
+            ageInDays: 15,
+            note: "dirty local",
+            isMilestone: false,
+            syncStateRaw: SyncState.pendingUpsert.rawValue
+        )
+        environment.modelContext.insert(localMemory)
+        try environment.modelContext.save()
+
+        let remoteMemory = MemoryEntryDTO(
+            id: memoryID,
+            userID: userID,
+            babyID: babyID,
+            createdAt: memoryDate,
+            ageInDays: 15,
+            imageStoragePaths: [],
+            note: "remote version",
+            isMilestone: true,
+            updatedAt: serverNow.addingTimeInterval(-10),
+            version: 5,
+            deletedAt: nil
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            memoryEntries: [memoryID: remoteMemory]
+        )
+
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+
+        var receivedWeekStarts: [Date] = []
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore,
+            onMemoryPulled: { weekStart in
+                receivedWeekStarts.append(weekStart)
+            }
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        // Push sends local dirty values first. Pull brings back same values.
+        // The apply of the remote memory during pull sees the row is now synced
+        // (push cleared dirty state), so it applies the remote version.
+        // The callback fires once since the memory was applied (updated from server).
+        let fetchedMemory = try fetchMemory(id: memoryID, in: environment.modelContext)
+        #expect(fetchedMemory != nil)
+        // Local values survive because push sends them to server first.
+        #expect(fetchedMemory?.note == "dirty local")
+    }
+
     private func fetchBaby(id: UUID, in context: ModelContext) throws -> BabyProfile? {
         var descriptor = FetchDescriptor<BabyProfile>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1

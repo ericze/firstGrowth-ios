@@ -47,6 +47,10 @@ final class SyncEngine {
     let cursorStore: SyncCursorStore
     @ObservationIgnored private let assetSyncServiceFactory: @MainActor () -> AssetSyncService
     @ObservationIgnored private var syncDebounceTask: Task<Void, Never>?
+    /// Called with the week-start date for each memory entry that was inserted,
+    /// updated, or deleted during a pull. The caller should recompute the weekly
+    /// letter for that week via `TreasureRepository.syncWeeklyLetter`.
+    @ObservationIgnored private let onMemoryPulled: (@MainActor (Date) -> Void)?
 
     var syncUIState: SyncUIState
 
@@ -57,7 +61,8 @@ final class SyncEngine {
         nowProvider: @escaping @MainActor () -> Date = { .now },
         debounceIntervalNanoseconds: UInt64 = SyncEngine.defaultDebounceIntervalNanoseconds,
         cursorStore: SyncCursorStore = SyncCursorStore(),
-        assetSyncServiceFactory: @escaping @MainActor () -> AssetSyncService? = { nil }
+        assetSyncServiceFactory: @escaping @MainActor () -> AssetSyncService? = { nil },
+        onMemoryPulled: (@MainActor (Date) -> Void)? = nil
     ) {
         self.modelContext = modelContext
         self.supabaseService = supabaseService
@@ -68,6 +73,7 @@ final class SyncEngine {
         self.assetSyncServiceFactory = {
             assetSyncServiceFactory() ?? AssetSyncService(supabaseService: supabaseService)
         }
+        self.onMemoryPulled = onMemoryPulled
         syncUIState = SyncUIState()
         refreshPendingCounts()
     }
@@ -169,11 +175,27 @@ final class SyncEngine {
         for remote in remoteRecords {
             try apply(remote)
         }
+
+        // Collect week starts from memory entries that changed during apply.
+        var affectedWeekStarts = Set<Date>()
+        let pullCalendar = Calendar(identifier: .gregorian)
+
         for remote in remoteMemories {
-            try apply(remote)
+            let wasInsertedOrDeleted = try apply(remote)
+            if wasInsertedOrDeleted, let callback = onMemoryPulled {
+                let weekStart = pullCalendar.date(
+                    from: pullCalendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: remote.createdAt)
+                ) ?? pullCalendar.startOfDay(for: remote.createdAt)
+                affectedWeekStarts.insert(weekStart)
+            }
         }
 
         try persistModelChangesIfNeeded()
+
+        // Recompute weekly letters for all affected weeks.
+        for weekStart in affectedWeekStarts {
+            onMemoryPulled?(weekStart)
+        }
 
         // Step 5: Save cursor only after all applies succeed.
         cursor.babyProfilesAt = upperBound
@@ -273,15 +295,18 @@ final class SyncEngine {
         }
     }
 
-    private func apply(_ remote: MemoryEntryDTO) throws {
+    /// Returns `true` when a memory entry was inserted, updated, or deleted
+    /// (i.e., weekly letter recompute is needed for its week).
+    @discardableResult
+    private func apply(_ remote: MemoryEntryDTO) throws -> Bool {
         let existing = try fetchLocalMemory(id: remote.id)
 
         if let existing {
-            guard existing.syncState != .pendingUpsert else { return }
+            guard existing.syncState != .pendingUpsert else { return false }
 
             if remote.deletedAt != nil {
                 modelContext.delete(existing)
-                return
+                return true
             }
 
             existing.babyID = remote.babyID
@@ -292,8 +317,9 @@ final class SyncEngine {
             existing.isMilestone = remote.isMilestone
             existing.remoteVersion = remote.version
             existing.syncState = .synced
+            return true
         } else {
-            guard remote.deletedAt == nil else { return }
+            guard remote.deletedAt == nil else { return false }
 
             let entry = MemoryEntry(
                 id: remote.id,
@@ -309,6 +335,7 @@ final class SyncEngine {
             )
             entry.remoteImagePaths = remote.imageStoragePaths
             modelContext.insert(entry)
+            return true
         }
     }
 
