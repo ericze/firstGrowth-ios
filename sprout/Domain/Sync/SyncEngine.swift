@@ -93,6 +93,7 @@ final class SyncEngine {
 
         do {
             try await pushPendingChanges()
+            try await pullLatestChanges()
             syncUIState.phase = .idle
             syncUIState.lastCompletedAt = nowProvider()
         } catch {
@@ -132,6 +133,201 @@ final class SyncEngine {
             try await pushDeletion(tombstone, assetSyncService: assetSyncService)
             try persistModelChangesIfNeeded()
         }
+    }
+
+    // MARK: - Pull
+
+    private func pullLatestChanges() async throws {
+        guard let userID = currentUserIDProvider() else {
+            throw SyncEngineError.unauthenticated
+        }
+
+        // Step 1: Upper-bound snapshot from server.
+        let upperBound = try await supabaseService.fetchServerNow()
+
+        // Step 2: Load current cursor for this user.
+        var cursor = cursorStore.load(for: userID)
+
+        // Step 3: Fetch per-table in fixed order.
+        let remoteBabies = try await supabaseService.fetchBabyProfiles(
+            updatedAfter: cursor.babyProfilesAt,
+            upTo: upperBound
+        )
+        let remoteRecords = try await supabaseService.fetchRecordItems(
+            updatedAfter: cursor.recordItemsAt,
+            upTo: upperBound
+        )
+        let remoteMemories = try await supabaseService.fetchMemoryEntries(
+            updatedAfter: cursor.memoryEntriesAt,
+            upTo: upperBound
+        )
+
+        // Step 4: Apply all rows.
+        for remote in remoteBabies {
+            try apply(remote)
+        }
+        for remote in remoteRecords {
+            try apply(remote)
+        }
+        for remote in remoteMemories {
+            try apply(remote)
+        }
+
+        try persistModelChangesIfNeeded()
+
+        // Step 5: Save cursor only after all applies succeed.
+        cursor.babyProfilesAt = upperBound
+        cursor.recordItemsAt = upperBound
+        cursor.memoryEntriesAt = upperBound
+        cursorStore.save(cursor, for: userID)
+    }
+
+    private func apply(_ remote: BabyProfileDTO) throws {
+        let existing = try fetchLocalBaby(id: remote.id)
+
+        if let existing {
+            // Skip rows where local is dirty.
+            guard existing.syncState != .pendingUpsert else { return }
+
+            // If remote is soft-deleted, remove local row.
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return
+            }
+
+            // Overwrite local fields with server truth.
+            existing.name = remote.name
+            existing.birthDate = remote.birthDate
+            existing.gender = remote.gender.flatMap { BabyProfile.Gender(rawValue: $0) }
+            existing.isActive = remote.isActive
+            existing.hasCompletedOnboarding = remote.hasCompletedOnboarding
+            existing.remoteAvatarPath = remote.avatarStoragePath
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+        } else {
+            // No local row exists. Skip if remote is soft-deleted.
+            guard remote.deletedAt == nil else { return }
+
+            let baby = BabyProfile(
+                id: remote.id,
+                name: remote.name,
+                birthDate: remote.birthDate,
+                gender: remote.gender.flatMap { BabyProfile.Gender(rawValue: $0) },
+                createdAt: remote.createdAt,
+                avatarPath: nil,
+                remoteAvatarPath: remote.avatarStoragePath,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                isActive: remote.isActive,
+                hasCompletedOnboarding: remote.hasCompletedOnboarding
+            )
+            modelContext.insert(baby)
+        }
+    }
+
+    private func apply(_ remote: RecordItemDTO) throws {
+        let existing = try fetchLocalRecord(id: remote.id)
+
+        if let existing {
+            guard existing.syncState != .pendingUpsert else { return }
+
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return
+            }
+
+            existing.babyID = remote.babyID
+            existing.timestamp = remote.timestamp
+            existing.type = remote.type
+            existing.value = remote.value
+            existing.leftNursingSeconds = remote.leftNursingSeconds
+            existing.rightNursingSeconds = remote.rightNursingSeconds
+            existing.subType = remote.subType
+            existing.remoteImagePath = remote.imageStoragePath
+            existing.aiSummary = remote.aiSummary
+            existing.tags = remote.tags
+            existing.note = remote.note
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+        } else {
+            guard remote.deletedAt == nil else { return }
+
+            let record = RecordItem(
+                id: remote.id,
+                babyID: remote.babyID,
+                timestamp: remote.timestamp,
+                type: remote.type,
+                value: remote.value,
+                leftNursingSeconds: remote.leftNursingSeconds,
+                rightNursingSeconds: remote.rightNursingSeconds,
+                subType: remote.subType,
+                imageURL: nil,
+                remoteImagePath: remote.imageStoragePath,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                aiSummary: remote.aiSummary,
+                tags: remote.tags,
+                note: remote.note
+            )
+            modelContext.insert(record)
+        }
+    }
+
+    private func apply(_ remote: MemoryEntryDTO) throws {
+        let existing = try fetchLocalMemory(id: remote.id)
+
+        if let existing {
+            guard existing.syncState != .pendingUpsert else { return }
+
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return
+            }
+
+            existing.babyID = remote.babyID
+            existing.createdAt = remote.createdAt
+            existing.ageInDays = remote.ageInDays
+            existing.remoteImagePaths = remote.imageStoragePaths
+            existing.note = remote.note
+            existing.isMilestone = remote.isMilestone
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+        } else {
+            guard remote.deletedAt == nil else { return }
+
+            let entry = MemoryEntry(
+                id: remote.id,
+                babyID: remote.babyID,
+                createdAt: remote.createdAt,
+                ageInDays: remote.ageInDays,
+                imageLocalPaths: [],
+                remoteImagePathsPayload: nil,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                note: remote.note,
+                isMilestone: remote.isMilestone
+            )
+            entry.remoteImagePaths = remote.imageStoragePaths
+            modelContext.insert(entry)
+        }
+    }
+
+    private func fetchLocalBaby(id: UUID) throws -> BabyProfile? {
+        var descriptor = FetchDescriptor<BabyProfile>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchLocalRecord(id: UUID) throws -> RecordItem? {
+        var descriptor = FetchDescriptor<RecordItem>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchLocalMemory(id: UUID) throws -> MemoryEntry? {
+        var descriptor = FetchDescriptor<MemoryEntry>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 
     private func pushBabyProfile(
