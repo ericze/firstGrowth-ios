@@ -44,8 +44,13 @@ final class SyncEngine {
     private let currentUserIDProvider: @MainActor () -> UUID?
     private let nowProvider: @MainActor () -> Date
     private let debounceIntervalNanoseconds: UInt64
+    let cursorStore: SyncCursorStore
     @ObservationIgnored private let assetSyncServiceFactory: @MainActor () -> AssetSyncService
     @ObservationIgnored private var syncDebounceTask: Task<Void, Never>?
+    /// Called with the week-start date for each memory entry that was inserted,
+    /// updated, or deleted during a pull. The caller should recompute the weekly
+    /// letter for that week via `TreasureRepository.syncWeeklyLetter`.
+    @ObservationIgnored private let onMemoryPulled: (@MainActor (Date) -> Void)?
 
     var syncUIState: SyncUIState
 
@@ -55,16 +60,20 @@ final class SyncEngine {
         currentUserIDProvider: @escaping @MainActor () -> UUID?,
         nowProvider: @escaping @MainActor () -> Date = { .now },
         debounceIntervalNanoseconds: UInt64 = SyncEngine.defaultDebounceIntervalNanoseconds,
-        assetSyncServiceFactory: @escaping @MainActor () -> AssetSyncService? = { nil }
+        cursorStore: SyncCursorStore = SyncCursorStore(),
+        assetSyncServiceFactory: @escaping @MainActor () -> AssetSyncService? = { nil },
+        onMemoryPulled: (@MainActor (Date) -> Void)? = nil
     ) {
         self.modelContext = modelContext
         self.supabaseService = supabaseService
         self.currentUserIDProvider = currentUserIDProvider
         self.nowProvider = nowProvider
         self.debounceIntervalNanoseconds = debounceIntervalNanoseconds
+        self.cursorStore = cursorStore
         self.assetSyncServiceFactory = {
             assetSyncServiceFactory() ?? AssetSyncService(supabaseService: supabaseService)
         }
+        self.onMemoryPulled = onMemoryPulled
         syncUIState = SyncUIState()
         refreshPendingCounts()
     }
@@ -90,6 +99,7 @@ final class SyncEngine {
 
         do {
             try await pushPendingChanges()
+            try await pullLatestChanges()
             syncUIState.phase = .idle
             syncUIState.lastCompletedAt = nowProvider()
         } catch {
@@ -129,6 +139,272 @@ final class SyncEngine {
             try await pushDeletion(tombstone, assetSyncService: assetSyncService)
             try persistModelChangesIfNeeded()
         }
+    }
+
+    // MARK: - Pull
+
+    private func pullLatestChanges() async throws {
+        guard let userID = currentUserIDProvider() else {
+            throw SyncEngineError.unauthenticated
+        }
+
+        // Step 1: Upper-bound snapshot from server.
+        let upperBound = try await supabaseService.fetchServerNow()
+
+        // Step 2: Load current cursor for this user.
+        var cursor = cursorStore.load(for: userID)
+
+        // Step 3: Fetch per-table in fixed order.
+        let remoteBabies = try await supabaseService.fetchBabyProfiles(
+            updatedAfter: cursor.babyProfilesAt,
+            upTo: upperBound
+        )
+        let remoteRecords = try await supabaseService.fetchRecordItems(
+            updatedAfter: cursor.recordItemsAt,
+            upTo: upperBound
+        )
+        let remoteMemories = try await supabaseService.fetchMemoryEntries(
+            updatedAfter: cursor.memoryEntriesAt,
+            upTo: upperBound
+        )
+
+        // Step 4: Apply all rows (synchronous metadata write).
+        var appliedBabies: [BabyProfile] = []
+        for remote in remoteBabies {
+            if let applied = try apply(remote) {
+                appliedBabies.append(applied)
+            }
+        }
+        var appliedRecords: [RecordItem] = []
+        for remote in remoteRecords {
+            if let applied = try apply(remote) {
+                appliedRecords.append(applied)
+            }
+        }
+
+        // Collect week starts from memory entries that changed during apply.
+        var affectedWeekStarts = Set<Date>()
+        let pullCalendar = Calendar(identifier: .gregorian)
+        var appliedMemories: [MemoryEntry] = []
+
+        for remote in remoteMemories {
+            let (wasInsertedOrDeleted, applied) = try apply(remote)
+            if let applied {
+                appliedMemories.append(applied)
+            }
+            if wasInsertedOrDeleted, let callback = onMemoryPulled {
+                let weekStart = pullCalendar.date(
+                    from: pullCalendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: remote.createdAt)
+                ) ?? pullCalendar.startOfDay(for: remote.createdAt)
+                affectedWeekStarts.insert(weekStart)
+            }
+        }
+
+        // Step 4b: Download missing assets (async, after metadata apply).
+        let assetSyncService = assetSyncServiceFactory()
+        for baby in appliedBabies {
+            let localPath = try? await assetSyncService.downloadAvatarIfNeeded(
+                userID: userID,
+                baby: baby,
+                localWritePath: baby.avatarPath
+            )
+            if let localPath {
+                baby.avatarPath = localPath
+            }
+        }
+        for record in appliedRecords {
+            let localPath = try? await assetSyncService.downloadFoodPhotoIfNeeded(
+                userID: userID,
+                record: record,
+                localWritePath: record.imageURL
+            )
+            if let localPath {
+                record.imageURL = localPath
+            }
+        }
+        for memory in appliedMemories {
+            let localPaths = (try? await assetSyncService.downloadTreasurePhotosIfNeeded(
+                userID: userID,
+                entry: memory,
+                localWritePaths: memory.imageLocalPaths
+            )) ?? memory.imageLocalPaths
+            memory.imageLocalPaths = localPaths
+        }
+
+        try persistModelChangesIfNeeded()
+
+        // Recompute weekly letters for all affected weeks.
+        for weekStart in affectedWeekStarts {
+            onMemoryPulled?(weekStart)
+        }
+
+        // Step 5: Save cursor only after all applies succeed.
+        cursor.babyProfilesAt = upperBound
+        cursor.recordItemsAt = upperBound
+        cursor.memoryEntriesAt = upperBound
+        cursorStore.save(cursor, for: userID)
+    }
+
+    /// Returns the applied `BabyProfile` (or `nil` if skipped/deleted).
+    @discardableResult
+    private func apply(_ remote: BabyProfileDTO) throws -> BabyProfile? {
+        let existing = try fetchLocalBaby(id: remote.id)
+
+        if let existing {
+            // Skip rows where local is dirty.
+            guard existing.syncState != .pendingUpsert else { return nil }
+
+            // If remote is soft-deleted, remove local row.
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return nil
+            }
+
+            // Overwrite local fields with server truth.
+            existing.name = remote.name
+            existing.birthDate = remote.birthDate
+            existing.gender = remote.gender.flatMap { BabyProfile.Gender(rawValue: $0) }
+            existing.isActive = remote.isActive
+            existing.hasCompletedOnboarding = remote.hasCompletedOnboarding
+            existing.remoteAvatarPath = remote.avatarStoragePath
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+            return existing
+        } else {
+            // No local row exists. Skip if remote is soft-deleted.
+            guard remote.deletedAt == nil else { return nil }
+
+            let baby = BabyProfile(
+                id: remote.id,
+                name: remote.name,
+                birthDate: remote.birthDate,
+                gender: remote.gender.flatMap { BabyProfile.Gender(rawValue: $0) },
+                createdAt: remote.createdAt,
+                avatarPath: nil,
+                remoteAvatarPath: remote.avatarStoragePath,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                isActive: remote.isActive,
+                hasCompletedOnboarding: remote.hasCompletedOnboarding
+            )
+            modelContext.insert(baby)
+            return baby
+        }
+    }
+
+    /// Returns the applied `RecordItem` (or `nil` if skipped/deleted).
+    @discardableResult
+    private func apply(_ remote: RecordItemDTO) throws -> RecordItem? {
+        let existing = try fetchLocalRecord(id: remote.id)
+
+        if let existing {
+            guard existing.syncState != .pendingUpsert else { return nil }
+
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return nil
+            }
+
+            existing.babyID = remote.babyID
+            existing.timestamp = remote.timestamp
+            existing.type = remote.type
+            existing.value = remote.value
+            existing.leftNursingSeconds = remote.leftNursingSeconds
+            existing.rightNursingSeconds = remote.rightNursingSeconds
+            existing.subType = remote.subType
+            existing.remoteImagePath = remote.imageStoragePath
+            existing.aiSummary = remote.aiSummary
+            existing.tags = remote.tags
+            existing.note = remote.note
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+            return existing
+        } else {
+            guard remote.deletedAt == nil else { return nil }
+
+            let record = RecordItem(
+                id: remote.id,
+                babyID: remote.babyID,
+                timestamp: remote.timestamp,
+                type: remote.type,
+                value: remote.value,
+                leftNursingSeconds: remote.leftNursingSeconds,
+                rightNursingSeconds: remote.rightNursingSeconds,
+                subType: remote.subType,
+                imageURL: nil,
+                remoteImagePath: remote.imageStoragePath,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                aiSummary: remote.aiSummary,
+                tags: remote.tags,
+                note: remote.note
+            )
+            modelContext.insert(record)
+            return record
+        }
+    }
+
+    /// Returns `(wasInsertedOrDeleted, appliedMemoryEntry)`.
+    /// `wasInsertedOrDeleted` is true when weekly letter recompute is needed.
+    /// `appliedMemoryEntry` is non-nil when the entry exists locally after apply.
+    @discardableResult
+    private func apply(_ remote: MemoryEntryDTO) throws -> (Bool, MemoryEntry?) {
+        let existing = try fetchLocalMemory(id: remote.id)
+
+        if let existing {
+            guard existing.syncState != .pendingUpsert else { return (false, nil) }
+
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return (true, nil)
+            }
+
+            existing.babyID = remote.babyID
+            existing.createdAt = remote.createdAt
+            existing.ageInDays = remote.ageInDays
+            existing.remoteImagePaths = remote.imageStoragePaths
+            existing.note = remote.note
+            existing.isMilestone = remote.isMilestone
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+            return (true, existing)
+        } else {
+            guard remote.deletedAt == nil else { return (false, nil) }
+
+            let entry = MemoryEntry(
+                id: remote.id,
+                babyID: remote.babyID,
+                createdAt: remote.createdAt,
+                ageInDays: remote.ageInDays,
+                imageLocalPaths: [],
+                remoteImagePathsPayload: nil,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                note: remote.note,
+                isMilestone: remote.isMilestone
+            )
+            entry.remoteImagePaths = remote.imageStoragePaths
+            modelContext.insert(entry)
+            return (true, entry)
+        }
+    }
+
+    private func fetchLocalBaby(id: UUID) throws -> BabyProfile? {
+        var descriptor = FetchDescriptor<BabyProfile>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchLocalRecord(id: UUID) throws -> RecordItem? {
+        var descriptor = FetchDescriptor<RecordItem>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchLocalMemory(id: UUID) throws -> MemoryEntry? {
+        var descriptor = FetchDescriptor<MemoryEntry>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 
     private func pushBabyProfile(
