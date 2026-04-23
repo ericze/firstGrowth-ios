@@ -11,6 +11,7 @@ final class TreasureStore {
     var headerConfig: HomeHeaderConfig
 
     @ObservationIgnored private var repository: TreasureRepository?
+    @ObservationIgnored private var milestoneRepository: GrowthMilestoneRepository?
     @ObservationIgnored private let timelineBuilder: TreasureTimelineBuilder
     @ObservationIgnored private let monthAnchorBuilder: TreasureMonthAnchorBuilder
     @ObservationIgnored private let weeklyLetterComposer: WeeklyLetterComposer
@@ -88,6 +89,9 @@ extension TreasureStore {
     func configure(modelContext: ModelContext) {
         guard repository == nil else { return }
         repository = TreasureRepository(modelContext: modelContext, calendar: calendar)
+        if milestoneRepository == nil {
+            milestoneRepository = GrowthMilestoneRepository(modelContext: modelContext)
+        }
     }
 
     func updateHeaderConfig(_ config: HomeHeaderConfig) {
@@ -411,7 +415,17 @@ extension TreasureStore {
         do {
             let entries = try repository.fetchMemoryEntries()
             let weeklyLetters = try repository.fetchWeeklyLetters()
-            let allItems = timelineBuilder.makeTimelineItems(entries: entries, weeklyLetters: weeklyLetters)
+            let milestones: [GrowthMilestoneEntry]
+            if let milestoneRepository {
+                milestones = try milestoneRepository.fetchMilestones(for: headerConfig.babyID)
+            } else {
+                milestones = []
+            }
+            let allItems = timelineBuilder.makeTimelineItems(
+                entries: entries,
+                weeklyLetters: weeklyLetters,
+                milestones: milestones
+            )
             let anchors = monthAnchorBuilder.build(from: allItems)
 
             viewState.timelineItems = allItems

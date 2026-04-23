@@ -148,6 +148,7 @@ struct TreasureDomainTests {
             note: "note",
             hasImageLoadError: false,
             isMilestone: false,
+            milestoneTitle: nil,
             letterDensity: nil,
             collapsedText: nil,
             expandedText: nil,
