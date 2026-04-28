@@ -127,7 +127,7 @@ struct SproutAppStartupTests {
 
     // MARK: - Default schema contains all required model types
 
-    @Test("Default schema includes all four model types")
+    @Test("Default schema includes all current model types")
     func testDefaultSchemaContainsAllModelTypes() async throws {
         // Use an in-memory configuration so this always succeeds
         let schema = SproutSchemaRegistry.schema
@@ -166,6 +166,14 @@ struct SproutAppStartupTests {
             )
             context.insert(tombstone)
 
+            let milestone = GrowthMilestoneEntry(
+                babyID: baby.id,
+                title: "Roll over",
+                category: "motor",
+                occurredAt: .now
+            )
+            context.insert(milestone)
+
             try context.save()
 
             let fetchedRecords = try context.fetch(FetchDescriptor<RecordItem>())
@@ -183,12 +191,33 @@ struct SproutAppStartupTests {
             let fetchedTombstones = try context.fetch(FetchDescriptor<SyncDeletionTombstone>())
             #expect(fetchedTombstones.count == 1)
 
+            let fetchedMilestones = try context.fetch(FetchDescriptor<GrowthMilestoneEntry>())
+            #expect(fetchedMilestones.count == 1)
+
         case .failure(let message):
             Issue.record(Comment(rawValue: "Schema test failed: \(message)"))
         }
     }
 
+    @Test("Migration plan does not repeat the same model shape across versions")
+    func testMigrationPlanDoesNotRepeatModelShapes() {
+        let modelSignatures = SproutMigrationPlan.schemas.map(Self.modelSignature)
+        #expect(Set(modelSignatures).count == modelSignatures.count)
+        #expect(modelSignatures.last == Self.modelSignature(SproutSchemaRegistry.models))
+    }
+
     // MARK: - Helpers
+
+    private static func modelSignature(_ schema: any VersionedSchema.Type) -> String {
+        modelSignature(schema.models)
+    }
+
+    private static func modelSignature(_ models: [any PersistentModel.Type]) -> String {
+        models
+            .map { String(reflecting: $0) }
+            .sorted()
+            .joined(separator: "|")
+    }
 
     private static func countStoreFiles(in directory: URL, fileManager: FileManager) -> Int {
         let fileNames = ["default.store", "default.store-wal", "default.store-shm"]
