@@ -764,7 +764,7 @@ enum SyncPhase {
 ### DEV-E4：两设备校验工具
 **目标**
 - 为 QA 提供可观察的同步验证方式
-- 进度：新增 gated `RealSupabaseServiceSmokeTests`，默认不依赖真实账号；设置 `SPROUT_REAL_SUPABASE_SMOKE=1` 和测试账号环境变量后可验证真实 Auth 登录 / 退出链路
+- 进度：新增 gated `RealSupabaseServiceSmokeTests`，默认不依赖真实账号；设置 `SPROUT_REAL_SUPABASE_SMOKE=1` 和测试账号环境变量后可验证真实 Auth 登录 / 退出、`server_now`、三类同步表 upsert / fetch / soft delete、私有 Storage 上传 / 下载 / 删除链路
 
 **要求**
 - 增加 debug 标记或 sync log 面板（Debug only）
@@ -801,8 +801,10 @@ enum SyncPhase {
 
 ### QA-E6 真实后端 Smoke
 - [x] 默认测试不需要真实凭据（`RealSupabaseServiceSmokeTests` 未设置环境变量时直接通过）
-- [ ] 设置真实测试账号后 Auth smoke 可登录并退出（需 QA 提供 `SPROUT_SUPABASE_TEST_EMAIL` / `SPROUT_SUPABASE_TEST_PASSWORD`）
-- [ ] SQL Editor 已执行 `supabase/migrations/202604270001_account_cloud_sync.sql` 且表 / bucket 存在
+- [x] 设置真实测试账号后 Auth smoke 可登录并退出（2026-04-28 已用 QA 测试账号验证）
+- [x] 设置真实测试账号后 data chain smoke 可写入并拉取 baby profile、record item、memory entry，随后 soft delete 生成 tombstone（2026-04-28 已验证）
+- [x] 设置真实测试账号后私有 Storage smoke 可上传、下载并删除 `baby-avatars` 对象（2026-04-28 已验证）
+- [x] SQL Editor 已执行 `supabase/migrations/202604270001_account_cloud_sync.sql` 且表 / bucket 存在（bucket 已确认为 private）
 
 ---
 

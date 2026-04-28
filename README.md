@@ -93,10 +93,10 @@ xcodebuild test \
 - 成长数据、图表交互、里程碑和格式化。
 - 珍藏时间线、周信、图片路径和仓储。
 - 同步状态、游标、迁移、启动容器和订阅状态。
-- Supabase 配置校验、Auth 管理、真实服务 smoke 测试门控。
+- Supabase 配置校验、Auth 管理、真实服务 smoke 测试门控与真实数据链 smoke。
 - 国际化语言状态、模板和本地化格式。
 
-真实 Supabase smoke 默认跳过外部连接；只有显式设置以下环境变量时才会登录真实后端：
+真实 Supabase smoke 默认跳过外部连接；只有显式设置以下环境变量时才会登录真实后端。当前真实 smoke 覆盖 Auth 登录 / 退出、`server_now`、`baby_profiles` / `record_items` / `memory_entries` 的 upsert / fetch / soft delete，以及私有 Storage 上传 / 下载 / 删除：
 
 ```bash
 SPROUT_REAL_SUPABASE_SMOKE=1
