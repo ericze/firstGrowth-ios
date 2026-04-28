@@ -56,7 +56,17 @@ extension TreasureRepository {
     }
 
     func fetchMemoryEntries() throws -> [MemoryEntry] {
+        let activeBabyID = try fetchPreferredBabyID()
+        guard let activeBabyID else {
+            let descriptor = FetchDescriptor<MemoryEntry>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+            return try modelContext.fetch(descriptor)
+        }
         let descriptor = FetchDescriptor<MemoryEntry>(
+            predicate: #Predicate<MemoryEntry> { item in
+                item.babyID == activeBabyID
+            },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         return try modelContext.fetch(descriptor)
@@ -166,20 +176,42 @@ extension TreasureRepository {
     }
 
     private func fetchEntries(in range: ClosedRange<Date>) throws -> [MemoryEntry] {
-        let descriptor = FetchDescriptor<MemoryEntry>(
-            predicate: #Predicate<MemoryEntry> { item in
+        let activeBabyID = try fetchPreferredBabyID()
+        let predicate: Predicate<MemoryEntry>
+        if let activeBabyID {
+            predicate = #Predicate<MemoryEntry> { item in
+                item.babyID == activeBabyID
+                    && item.createdAt >= range.lowerBound
+                    && item.createdAt <= range.upperBound
+            }
+        } else {
+            predicate = #Predicate<MemoryEntry> { item in
                 item.createdAt >= range.lowerBound && item.createdAt <= range.upperBound
-            },
+            }
+        }
+        let descriptor = FetchDescriptor<MemoryEntry>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.createdAt, order: .forward)]
         )
         return try modelContext.fetch(descriptor)
     }
 
     private func fetchMilestones(in range: ClosedRange<Date>) throws -> [GrowthMilestoneEntry] {
-        let descriptor = FetchDescriptor<GrowthMilestoneEntry>(
-            predicate: #Predicate<GrowthMilestoneEntry> { item in
+        let activeBabyID = try fetchPreferredBabyID()
+        let predicate: Predicate<GrowthMilestoneEntry>
+        if let activeBabyID {
+            predicate = #Predicate<GrowthMilestoneEntry> { item in
+                item.babyID == activeBabyID
+                    && item.occurredAt >= range.lowerBound
+                    && item.occurredAt <= range.upperBound
+            }
+        } else {
+            predicate = #Predicate<GrowthMilestoneEntry> { item in
                 item.occurredAt >= range.lowerBound && item.occurredAt <= range.upperBound
-            },
+            }
+        }
+        let descriptor = FetchDescriptor<GrowthMilestoneEntry>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.occurredAt, order: .forward)]
         )
         return try modelContext.fetch(descriptor)
@@ -201,11 +233,24 @@ extension TreasureRepository {
         let headType = RecordType.headCircumference.rawValue
         let foodType = RecordType.food.rawValue
 
-        let descriptor = FetchDescriptor<RecordItem>(
-            predicate: #Predicate<RecordItem> { item in
+        let activeBabyID = try fetchPreferredBabyID()
+        let predicate: Predicate<RecordItem>
+        if let activeBabyID {
+            predicate = #Predicate<RecordItem> { item in
+                item.babyID == activeBabyID
+                    && (item.type == heightType || item.type == weightType || item.type == headType || item.type == foodType)
+                    && item.timestamp >= range.lowerBound
+                    && item.timestamp <= range.upperBound
+            }
+        } else {
+            predicate = #Predicate<RecordItem> { item in
                 (item.type == heightType || item.type == weightType || item.type == headType || item.type == foodType)
-                    && item.timestamp >= range.lowerBound && item.timestamp <= range.upperBound
-            },
+                    && item.timestamp >= range.lowerBound
+                    && item.timestamp <= range.upperBound
+            }
+        }
+        let descriptor = FetchDescriptor<RecordItem>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.timestamp, order: .forward)]
         )
         return try modelContext.fetch(descriptor)

@@ -144,6 +144,42 @@ struct BabyRepositoryTests {
         #expect(repo.activeBaby?.syncState == .pendingUpsert)
     }
 
+    @Test("createBaby creates a second active baby and deactivates the previous one")
+    func testCreateSecondBabyActivatesNewBaby() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let state = ActiveBabyState()
+        let repo = env.makeBabyRepository(activeBabyState: state)
+        #expect(repo.createDefaultIfNeeded() == true)
+        let firstBaby = try #require(repo.activeBaby)
+
+        let secondBaby = try #require(repo.createBaby(name: "小栗子", birthDate: env.now.value))
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.count == 2)
+        #expect(secondBaby.isActive == true)
+        #expect(firstBaby.isActive == false)
+        #expect(repo.activeBaby?.id == secondBaby.id)
+        #expect(state.headerConfig.babyID == secondBaby.id)
+    }
+
+    @Test("activateBaby switches the active baby and syncs header state")
+    func testActivateBabySwitchesActiveBaby() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let state = ActiveBabyState()
+        let repo = env.makeBabyRepository(activeBabyState: state)
+        #expect(repo.createDefaultIfNeeded() == true)
+        let firstBaby = try #require(repo.activeBaby)
+        _ = try #require(repo.createBaby(name: "小栗子", birthDate: env.now.value))
+
+        #expect(repo.activateBaby(id: firstBaby.id) == true)
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.first { $0.id == firstBaby.id }?.isActive == true)
+        #expect(babies.filter { $0.isActive }.count == 1)
+        #expect(repo.activeBaby?.id == firstBaby.id)
+        #expect(state.headerConfig.babyID == firstBaby.id)
+    }
+
     @Test("update methods fail safely when no active baby exists")
     func testUpdateMethodsFailWhenNoActiveBaby() async throws {
         let env = try makeTestEnvironment(now: .now)

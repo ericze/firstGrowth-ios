@@ -22,6 +22,36 @@ final class RecordRepositoryTests: XCTestCase {
         XCTAssertNil(record.remoteVersion)
     }
 
+    func testFetchTodayRecordsReturnsOnlyActiveBabyRecords() throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let activeBabyID = UUID()
+        let otherBabyID = UUID()
+        environment.modelContext.insert(BabyProfile(id: activeBabyID, name: "A", isActive: true))
+        environment.modelContext.insert(BabyProfile(id: otherBabyID, name: "B", isActive: false))
+        environment.modelContext.insert(RecordItem(babyID: activeBabyID, timestamp: environment.now.value, type: RecordType.milk.rawValue, value: 90))
+        environment.modelContext.insert(RecordItem(babyID: otherBabyID, timestamp: environment.now.value, type: RecordType.milk.rawValue, value: 120))
+        try environment.modelContext.save()
+
+        let records = try environment.recordRepository.fetchTodayRecords(referenceDate: environment.now.value)
+
+        XCTAssertEqual(records.map(\.babyID), [activeBabyID])
+    }
+
+    func testFetchRecentFoodTagsReturnsOnlyActiveBabyTags() throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let activeBabyID = UUID()
+        let otherBabyID = UUID()
+        environment.modelContext.insert(BabyProfile(id: activeBabyID, name: "A", isActive: true))
+        environment.modelContext.insert(BabyProfile(id: otherBabyID, name: "B", isActive: false))
+        environment.modelContext.insert(RecordItem(babyID: activeBabyID, timestamp: environment.now.value, type: RecordType.food.rawValue, tags: ["apple"]))
+        environment.modelContext.insert(RecordItem(babyID: otherBabyID, timestamp: environment.now.value, type: RecordType.food.rawValue, tags: ["banana"]))
+        try environment.modelContext.save()
+
+        let tags = try environment.recordRepository.fetchRecentFoodTags()
+
+        XCTAssertEqual(tags, ["apple"])
+    }
+
     func testUpdateRecordMarksPendingUpsertAndKeepsRemoteVersion() throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
         let record = try environment.recordRepository.createFeedingRecord(

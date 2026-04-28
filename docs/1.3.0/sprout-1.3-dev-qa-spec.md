@@ -476,6 +476,7 @@ struct SubscriptionEntitlement {
 ### DEV-C1：BabyProfileStore 扩展
 **目标**
 - 从单宝宝转为多宝宝集合 + activeBabyID
+- 进度：已在 `BabyRepository` 落地最小集合能力，包括 `fetchBabies()`、`createBaby(...)`、`activateBaby(id:)`；创建第二个宝宝会激活新宝宝并停用旧 active baby，切换会同步 `ActiveBabyState`
 
 **建议结构**
 ```swift
@@ -498,6 +499,7 @@ struct BabyRegistry {
 ### DEV-C2：页面联动刷新
 **目标**
 - 切换宝宝后 Home / Growth / Treasure / Shell 同步刷新
+- 进度：`ContentView` 监听 `ActiveBabyState.headerConfig` 后会更新 Home / Growth / Treasure；Home 和 Treasure 在已加载后立即刷新数据，Growth 继续走 `refreshAfterProfileChange()`
 
 **实现要求**
 - 使用统一 activeBaby publisher / observer
@@ -513,6 +515,22 @@ struct BabyRegistry {
   - 是否有共享家庭组
   - 是否有未同步变更
 
+### DEV-C5：数据隔离最小闭环
+**目标**
+- Home / Growth / Treasure 默认只读取当前 active baby 数据
+
+**当前状态**
+- `RecordRepository.fetchTodayRecords` / `fetchHistory` / `fetchRecentFoodTags` 已按 active babyID 过滤，新增 Home 记录写入 active babyID
+- `GrowthRecordRepository.fetchRecords` / `fetchLatestRecord` 已按 active babyID 过滤，新增 Growth 记录写入 active babyID
+- `TreasureRepository.fetchMemoryEntries`、周信 digest 内部 memory / milestone / growth 查询已按 active babyID 过滤，新增 Memory 写入 active babyID
+- 本轮未给 `WeeklyLetter` 增加 `babyID` 字段，避免在 DEV-C 引入 SwiftData staged migration 变更；周信持久化的 baby 级隔离需后续 schema 任务单独处理
+
+**测试覆盖**
+- `BabyRepositoryTests` 覆盖创建第二个宝宝、切换 active baby、header 状态同步
+- `RecordRepositoryTests` 覆盖 Home 今日记录和最近辅食标签按 active baby 过滤
+- `GrowthRecordRepositoryTests` 覆盖 Growth 记录按 active baby 过滤及新增记录写入 active babyID
+- `TreasureRepositoryTests` 覆盖珍藏记忆按 active baby 过滤
+
 ## C.7 QA 验收项
 
 ### QA-C1 创建 / 编辑
@@ -521,14 +539,14 @@ struct BabyRegistry {
 - [ ] 可编辑宝宝昵称 / 生日 / 头像
 
 ### QA-C2 切换
-- [ ] 切换 active baby 后 Home 刷新
-- [ ] 切换 active baby 后 Growth 刷新
-- [ ] 切换 active baby 后 Treasure 刷新
+- [x] 切换 active baby 后 Home 刷新
+- [x] 切换 active baby 后 Growth 刷新
+- [x] 切换 active baby 后 Treasure 刷新
 - [ ] 周信内容随宝宝切换变化
 
 ### QA-C3 数据隔离
-- [ ] A 宝宝记录不出现在 B 宝宝下
-- [ ] A 宝宝成长数据不出现在 B 宝宝下
+- [x] A 宝宝记录不出现在 B 宝宝下
+- [x] A 宝宝成长数据不出现在 B 宝宝下
 - [ ] A 宝宝周信不出现在 B 宝宝下
 
 ### QA-C4 删除

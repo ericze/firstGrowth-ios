@@ -40,6 +40,67 @@ final class BabyRepository {
         }
     }
 
+    func fetchBabies() throws -> [BabyProfile] {
+        let descriptor = FetchDescriptor<BabyProfile>(
+            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
+        )
+        return try modelContext.fetch(descriptor)
+    }
+
+    func createBaby(name: String, birthDate: Date, gender: BabyProfile.Gender? = nil) -> BabyProfile? {
+        do {
+            let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let baby = BabyProfile(
+                id: UUID(),
+                name: normalizedName.isEmpty ? BabyProfile.defaultName : normalizedName,
+                birthDate: birthDate,
+                gender: gender,
+                createdAt: .now,
+                syncStateRaw: SyncState.pendingUpsert.rawValue,
+                isActive: true
+            )
+
+            let babies = try fetchBabies()
+            for existingBaby in babies where existingBaby.isActive {
+                existingBaby.isActive = false
+                markPendingUpsert(existingBaby)
+            }
+
+            modelContext.insert(baby)
+            try modelContext.save()
+            activeBabyState?.updateFrom(baby)
+            return baby
+        } catch {
+            recordFailure(operation: "Create baby", error: error)
+            return nil
+        }
+    }
+
+    @discardableResult
+    func activateBaby(id: UUID) -> Bool {
+        do {
+            let babies = try fetchBabies()
+            guard let targetBaby = babies.first(where: { $0.id == id }) else {
+                recordFailure(operation: "Activate baby", reason: "Baby not found")
+                return false
+            }
+
+            for baby in babies {
+                let shouldBeActive = baby.id == id
+                guard baby.isActive != shouldBeActive else { continue }
+                baby.isActive = shouldBeActive
+                markPendingUpsert(baby)
+            }
+
+            try modelContext.save()
+            activeBabyState?.updateFrom(targetBaby)
+            return true
+        } catch {
+            recordFailure(operation: "Activate baby", error: error)
+            return false
+        }
+    }
+
     @discardableResult
     func updateName(_ name: String) -> Bool {
         do {

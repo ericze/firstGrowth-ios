@@ -211,6 +211,11 @@ extension HomeStore {
 
     func updateHeaderConfig(_ config: HomeHeaderConfig) {
         headerConfig = config
+        guard viewState.hasLoadedInitialData else { return }
+        reloadTimeline()
+        refreshRecentFoodTags()
+        refreshKnownFoodTags()
+        updateFirstTasteFoodTags()
     }
 
     func onAppear() {

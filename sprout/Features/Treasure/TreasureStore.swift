@@ -96,6 +96,8 @@ extension TreasureStore {
 
     func updateHeaderConfig(_ config: HomeHeaderConfig) {
         headerConfig = config
+        guard viewState.hasLoadedInitialData else { return }
+        refreshTimeline()
     }
 
     func onAppear() {

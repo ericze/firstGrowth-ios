@@ -31,6 +31,21 @@ final class TreasureRepositoryTests: XCTestCase {
         XCTAssertNil(entry.remoteVersion)
     }
 
+    func testFetchMemoryEntriesReturnsOnlyActiveBabyEntries() throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let activeBabyID = UUID()
+        let otherBabyID = UUID()
+        environment.modelContext.insert(BabyProfile(id: activeBabyID, name: "A", isActive: true))
+        environment.modelContext.insert(BabyProfile(id: otherBabyID, name: "B", isActive: false))
+        environment.modelContext.insert(MemoryEntry(babyID: activeBabyID, createdAt: environment.now.value, ageInDays: 1, note: "active"))
+        environment.modelContext.insert(MemoryEntry(babyID: otherBabyID, createdAt: environment.now.value, ageInDays: 1, note: "other"))
+        try environment.modelContext.save()
+
+        let entries = try environment.treasureRepository.fetchMemoryEntries()
+
+        XCTAssertEqual(entries.map(\.babyID), [activeBabyID])
+    }
+
     func testDeleteMemoryEntryCreatesDeletionTombstoneWithRemoteImagePaths() throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
         let activeBaby = BabyProfile(

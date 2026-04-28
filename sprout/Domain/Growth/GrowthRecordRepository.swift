@@ -19,10 +19,19 @@ nonisolated final class GrowthRecordRepository {
 extension GrowthRecordRepository {
     func fetchRecords(for metric: GrowthMetric) throws -> [RecordItem] {
         let rawType = metric.recordType.rawValue
-        let descriptor = FetchDescriptor<RecordItem>(
-            predicate: #Predicate<RecordItem> { item in
+        let activeBabyID = resolvedActiveBabyID()
+        let predicate: Predicate<RecordItem>
+        if let activeBabyID {
+            predicate = #Predicate<RecordItem> { item in
+                item.babyID == activeBabyID && item.type == rawType
+            }
+        } else {
+            predicate = #Predicate<RecordItem> { item in
                 item.type == rawType
-            },
+            }
+        }
+        let descriptor = FetchDescriptor<RecordItem>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.timestamp, order: .forward)]
         )
 
@@ -31,10 +40,19 @@ extension GrowthRecordRepository {
 
     func fetchLatestRecord(for metric: GrowthMetric) throws -> RecordItem? {
         let rawType = metric.recordType.rawValue
-        var descriptor = FetchDescriptor<RecordItem>(
-            predicate: #Predicate<RecordItem> { item in
+        let activeBabyID = resolvedActiveBabyID()
+        let predicate: Predicate<RecordItem>
+        if let activeBabyID {
+            predicate = #Predicate<RecordItem> { item in
+                item.babyID == activeBabyID && item.type == rawType
+            }
+        } else {
+            predicate = #Predicate<RecordItem> { item in
                 item.type == rawType
-            },
+            }
+        }
+        var descriptor = FetchDescriptor<RecordItem>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
         descriptor.fetchLimit = 1
@@ -47,6 +65,9 @@ extension GrowthRecordRepository {
             type: metric.recordType.rawValue,
             value: value
         )
+        if let activeBabyID = resolvedActiveBabyID() {
+            record.babyID = activeBabyID
+        }
         try validator.validate(record)
         modelContext.insert(record)
         try modelContext.save()
@@ -64,5 +85,24 @@ extension GrowthRecordRepository {
         guard let record = try modelContext.fetch(descriptor).first else { return }
         modelContext.delete(record)
         try modelContext.save()
+    }
+
+    private func resolvedActiveBabyID() -> UUID? {
+        var activeDescriptor = FetchDescriptor<BabyProfile>(
+            predicate: #Predicate<BabyProfile> { profile in
+                profile.isActive == true
+            },
+            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
+        )
+        activeDescriptor.fetchLimit = 1
+        if let activeBaby = try? modelContext.fetch(activeDescriptor).first {
+            return activeBaby.id
+        }
+
+        var fallbackDescriptor = FetchDescriptor<BabyProfile>(
+            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
+        )
+        fallbackDescriptor.fetchLimit = 1
+        return try? modelContext.fetch(fallbackDescriptor).first?.id
     }
 }

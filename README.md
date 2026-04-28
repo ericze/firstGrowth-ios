@@ -29,6 +29,7 @@ Sprout. At your own pace.
 - 首页记录：奶、尿布、睡眠、辅食等高频记录入口与时间线展示。
 - 成长：身高、体重、里程碑、趋势图和克制的解释性文案。
 - 珍藏：照片、文字记忆、时间线、月锚点和周信。
+- 多宝宝：通过 `BabyRepository` 创建 / 切换 active baby，Home / Growth / Treasure 的记录与记忆查询按当前 babyID 隔离。
 - 侧边栏：宝宝资料、设置入口、订阅与状态信息承载。
 - 同步：本地优先的数据迁移、游标、资产同步和删除墓碑。
 - 国际化：字符串目录、语言状态、格式化服务和文案模板提供器。
@@ -99,6 +100,7 @@ xcodebuild test \
 - Pro 权益入口统一走 `ProCapability` 与 `SubscriptionManager.allows(_:)`；页面和菜单只声明 `requiredCapability`，不要散落原始 `isPro` 判断。
 - Paywall 主承诺统一来自 `PaywallContent.promotedCapabilities`；未通过发布验收的能力不得出现在可购买权益列表中。
 - Paywall 的 Terms / Privacy 链接维护在 `docs/legal` 对应文档，禁止使用 `example.com` 占位链接。
+- 多宝宝数据读取必须以 active baby 为默认边界；新增记录、成长记录、珍藏记忆时应写入当前 active babyID。若要扩展到 `WeeklyLetter` schema，必须先设计 staged migration，避免重复 version checksum。
 - 公共类和公开函数保持清晰命名，复杂业务决策才添加注释。
 - 不硬编码业务页面颜色，统一走语义化设计 token。
 - 不使用纯黑文本、高饱和提示色或刺眼错误红。

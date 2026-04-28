@@ -229,10 +229,19 @@ extension RecordRepository {
     func fetchTodayRecords(referenceDate: Date) throws -> [RecordItem] {
         flushExpiredPendingFoodPhotoRemovals()
         let startOfDay = calendar.startOfDay(for: referenceDate)
-        var descriptor = FetchDescriptor<RecordItem>(
-            predicate: #Predicate<RecordItem> { item in
+        let activeBabyID = resolvedActiveBabyID()
+        let predicate: Predicate<RecordItem>
+        if let activeBabyID {
+            predicate = #Predicate<RecordItem> { item in
+                item.babyID == activeBabyID && item.timestamp >= startOfDay && item.timestamp <= referenceDate
+            }
+        } else {
+            predicate = #Predicate<RecordItem> { item in
                 item.timestamp >= startOfDay && item.timestamp <= referenceDate
-            },
+            }
+        }
+        var descriptor = FetchDescriptor<RecordItem>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
         descriptor.includePendingChanges = true
@@ -241,10 +250,19 @@ extension RecordRepository {
 
     func fetchHistory(before date: Date, limit: Int) throws -> [RecordItem] {
         flushExpiredPendingFoodPhotoRemovals()
-        var descriptor = FetchDescriptor<RecordItem>(
-            predicate: #Predicate<RecordItem> { item in
+        let activeBabyID = resolvedActiveBabyID()
+        let predicate: Predicate<RecordItem>
+        if let activeBabyID {
+            predicate = #Predicate<RecordItem> { item in
+                item.babyID == activeBabyID && item.timestamp < date
+            }
+        } else {
+            predicate = #Predicate<RecordItem> { item in
                 item.timestamp < date
-            },
+            }
+        }
+        var descriptor = FetchDescriptor<RecordItem>(
+            predicate: predicate,
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
         descriptor.fetchLimit = limit
@@ -265,10 +283,25 @@ extension RecordRepository {
 
     func fetchRecentFoodTags(limit: Int = 8, sampleRecordLimit: Int = 30) throws -> [String] {
         flushExpiredPendingFoodPhotoRemovals()
-        var descriptor = FetchDescriptor<RecordItem>(sortBy: [SortDescriptor(\.timestamp, order: .reverse)])
+        let foodType = RecordType.food.rawValue
+        let activeBabyID = resolvedActiveBabyID()
+        let predicate: Predicate<RecordItem>
+        if let activeBabyID {
+            predicate = #Predicate<RecordItem> { item in
+                item.babyID == activeBabyID && item.type == foodType
+            }
+        } else {
+            predicate = #Predicate<RecordItem> { item in
+                item.type == foodType
+            }
+        }
+        var descriptor = FetchDescriptor<RecordItem>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        )
         descriptor.fetchLimit = sampleRecordLimit
 
-        let records = try modelContext.fetch(descriptor).filter { $0.recordType == .food }
+        let records = try modelContext.fetch(descriptor)
         var suggestions: [String] = []
 
         for record in records {
