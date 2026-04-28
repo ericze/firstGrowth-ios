@@ -52,4 +52,27 @@ struct AppLanguageManagerTests {
         #expect(englishTitles != chineseTitles)
         #expect(englishDetails != chineseDetails)
     }
+
+    @Test("language region selection only commits changed language")
+    func testLanguageRegionSelectionOnlyCommitsChangedLanguage() {
+        var currentLanguage = AppLanguage.english
+        var committedLanguages: [AppLanguage] = []
+        let selection = LanguageRegionSelection(
+            currentLanguage: { currentLanguage },
+            commit: { language in
+                currentLanguage = language
+                committedLanguages.append(language)
+            }
+        )
+
+        selection.select(.english)
+        #expect(committedLanguages.isEmpty)
+
+        selection.select(.simplifiedChinese)
+        #expect(currentLanguage == .simplifiedChinese)
+        #expect(committedLanguages == [.simplifiedChinese])
+
+        selection.select(.simplifiedChinese)
+        #expect(committedLanguages == [.simplifiedChinese])
+    }
 }

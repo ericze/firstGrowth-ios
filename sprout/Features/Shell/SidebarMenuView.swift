@@ -6,7 +6,11 @@ struct SidebarMenuView: View {
     let onNavigate: (SidebarRoute) -> Void
 
     private let calendar = Calendar.current
-    private let localizationService = LocalizationService.current
+    @State private var languageManager = AppLanguageManager.shared
+
+    private var localizationService: LocalizationService {
+        LocalizationService(language: languageManager.language)
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -82,7 +86,7 @@ struct SidebarMenuView: View {
     }
 
     private var indexCard: some View {
-        let items = SidebarIndexItem.items
+        let items = SidebarIndexItem.items(service: localizationService)
 
         return VStack(alignment: .leading, spacing: 0) {
             Text(

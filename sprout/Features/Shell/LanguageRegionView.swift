@@ -1,22 +1,37 @@
 import SwiftUI
 
+struct LanguageRegionSelection {
+    let currentLanguage: () -> AppLanguage
+    let commit: (AppLanguage) -> Void
+
+    func select(_ language: AppLanguage) {
+        guard language != currentLanguage() else { return }
+        commit(language)
+    }
+}
+
 /// Language & Region settings page.
-///
-/// V1: Read-only display of the current app language and device timezone.
-/// The `onLanguageChange` closure is the integration point for Bundle E
-/// to wire up real in-app language switching.  Until then the chips are
-/// informational only (showing which language is active) and tapping
-/// them is a no-op so the page is not a "fake switcher".
 struct LanguageRegionView: View {
     /// Called when the user selects a different language.
-    /// Bundle E should set this to a closure that persists the choice
-    /// and reinitialises the app locale.  Defaults to a no-op in V1.
+    /// The view persists the selection through `AppLanguageManager`; this
+    /// closure is only for parent-level side effects.
     var onLanguageChange: (AppLanguage) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
+    @State private var languageManager = AppLanguageManager.shared
 
     private var currentLanguage: AppLanguage {
-        LocalizationService.current.language
+        languageManager.language
+    }
+
+    private var selection: LanguageRegionSelection {
+        LanguageRegionSelection(
+            currentLanguage: { languageManager.language },
+            commit: { language in
+                languageManager.language = language
+                onLanguageChange(language)
+            }
+        )
     }
 
     var body: some View {
@@ -75,9 +90,8 @@ struct LanguageRegionView: View {
     private func languageChip(label: String, language: AppLanguage) -> some View {
         let isSelected = currentLanguage == language
         return Button(action: {
-            guard !isSelected else { return }
             AppHaptics.selection()
-            onLanguageChange(language)
+            selection.select(language)
         }) {
             Text(label)
                 .font(AppTheme.Typography.sheetBody)

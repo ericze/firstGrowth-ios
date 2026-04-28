@@ -32,9 +32,7 @@ struct SidebarDrawer: View {
                 case .babyProfile:
                     BabyProfileView(babyRepository: babyRepository)
                 case .language:
-                    LanguageRegionView(onLanguageChange: { newLanguage in
-                        AppLanguageManager.shared.language = newLanguage
-                    })
+                    LanguageRegionView()
                 case .account:
                     AccountView()
                 case .cloudSync:
@@ -72,8 +70,10 @@ struct SidebarIndexItem: Identifiable {
     let isPro: Bool
 
     static var items: [SidebarIndexItem] {
-        let service = LocalizationService.current
+        items(service: .current)
+    }
 
+    static func items(service: LocalizationService) -> [SidebarIndexItem] {
         return [
             SidebarIndexItem(
                 id: "language",
