@@ -477,6 +477,7 @@ struct SubscriptionEntitlement {
 **目标**
 - 从单宝宝转为多宝宝集合 + activeBabyID
 - 进度：已在 `BabyRepository` 落地最小集合能力，包括 `fetchBabies()`、`createBaby(...)`、`activateBaby(id:)`；创建第二个宝宝会激活新宝宝并停用旧 active baby，切换会同步 `ActiveBabyState`
+- 1.3 profile slice：宝宝资料页已覆盖宝宝列表展示、active baby 切换、新增宝宝入口；删除宝宝流程仍未实现
 
 **建议结构**
 ```swift
@@ -508,12 +509,14 @@ struct BabyRegistry {
 ### DEV-C3：Pro gating
 - 免费版限制 1 个宝宝
 - 触发第二个宝宝创建时弹 paywall
+- 进度：免费用户在宝宝资料页尝试创建第二个宝宝时进入 paywall，不再静默失败；repository 层继续保留 entitlement gate
 
 ### DEV-C4：删除宝宝保护
 - 删除前检查：
   - 是否为 active baby
   - 是否有共享家庭组
   - 是否有未同步变更
+- 进度：当前删除流仅支持删除没有关联记录 / 成长条目 / 珍藏内容的宝宝 profile；删除前有二次确认，删除 active baby 后会自动切到另一位宝宝；共享宝宝额外提示仍待 Family Group 落地后补齐
 
 ### DEV-C5：数据隔离最小闭环
 **目标**
@@ -527,6 +530,10 @@ struct BabyRegistry {
 
 **测试覆盖**
 - `BabyRepositoryTests` 覆盖创建第二个宝宝、切换 active baby、header 状态同步
+- `BabyRepositoryTests/freeEntitlementBlocksSecondBabyWithoutDeletingExistingData` 覆盖免费用户不能创建第二个宝宝且不会删除已有数据
+- `BabyRepositoryTests` 新增 typed create-result 覆盖，验证第二个宝宝创建被权益 gate 拦截时会返回明确失败原因
+- `BabyRepositoryTests` 新增 blank-name normalization 覆盖，验证空白名称创建时会归一化为默认宝宝名
+- `BabyRepositoryTests` 新增 delete-baby 覆盖，验证 inactive 删除写 tombstone、删除 active baby 会自动切换，以及最后一个 / 有关联数据的宝宝会被阻止删除
 - `RecordRepositoryTests` 覆盖 Home 今日记录和最近辅食标签按 active baby 过滤
 - `GrowthRecordRepositoryTests` 覆盖 Growth 记录按 active baby 过滤及新增记录写入 active babyID
 - `TreasureRepositoryTests` 覆盖珍藏记忆按 active baby 过滤
@@ -534,11 +541,14 @@ struct BabyRegistry {
 ## C.7 QA 验收项
 
 ### QA-C1 创建 / 编辑
-- [ ] 可成功创建第二个宝宝（Pro）
-- [ ] 免费用户无法创建第二个宝宝
-- [ ] 可编辑宝宝昵称 / 生日 / 头像
+- [x] 宝宝资料页可展示宝宝列表并标识当前 active baby（1.3 profile slice）
+- [x] 宝宝资料页可成功创建第二个宝宝（Pro；repository 自动化：`BabyRepositoryTests` 创建第二个宝宝覆盖）
+- [x] 免费用户创建第二个宝宝会进入 paywall，不再静默失败（domain：`BabyRepositoryTests/freeEntitlementBlocksSecondBabyWithoutDeletingExistingData`；typed result：`BabyRepositoryTests` 新增 entitlement-blocked 覆盖）
+- [x] 空白宝宝名创建会归一化为默认宝宝名（`BabyRepositoryTests` 新增 blank-name normalization 覆盖）
+- [ ] 可编辑宝宝昵称 / 生日 / 头像（需真实设备手动回归，尤其头像相册 / 相机权限）
 
 ### QA-C2 切换
+- [x] 宝宝资料页可切换 active baby（1.3 profile slice；repository 自动化：`BabyRepositoryTests` 切换 active baby / header 状态同步覆盖）
 - [x] 切换 active baby 后 Home 刷新
 - [x] 切换 active baby 后 Growth 刷新
 - [x] 切换 active baby 后 Treasure 刷新
@@ -550,8 +560,9 @@ struct BabyRegistry {
 - [ ] A 宝宝周信不出现在 B 宝宝下
 
 ### QA-C4 删除
-- [ ] 删除宝宝前有二次确认
-- [ ] 删除 active baby 后 activeBaby 自动切换为其他可用宝宝
+- [x] 删除宝宝前有二次确认（1.3 profile slice）
+- [x] 删除 active baby 后 activeBaby 自动切换为其他可用宝宝（`BabyRepositoryTests/deleteBabyResultSwitchesActiveBabyWhenDeletingCurrentBaby`）
+- [x] 有关联记录的宝宝会被阻止删除，避免产生孤儿数据（`BabyRepositoryTests/deleteBabyResultBlocksRemovingBabyWithAssociatedData`）
 - [ ] 删除共享宝宝有额外提示
 - [ ] 删除后页面不崩溃
 

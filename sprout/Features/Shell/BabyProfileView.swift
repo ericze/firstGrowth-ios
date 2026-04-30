@@ -4,8 +4,11 @@ import UIKit
 
 struct BabyProfileView: View {
     let babyRepository: BabyRepository
+    let onShowPaywall: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(SubscriptionManager.self) private var subscriptionManager
+    @State private var babies: [BabyProfile] = []
     @State private var name: String = ""
     @State private var birthDate: Date = .now
     @State private var gender: BabyProfile.Gender?
@@ -14,14 +17,28 @@ struct BabyProfileView: View {
     @State private var errorDismissTask: Task<Void, Never>?
 
     @State private var isShowingAvatarSourcePicker = false
+    @State private var isShowingCreateBabySheet = false
+    @State private var newBabyName: String = ""
+    @State private var newBabyBirthDate: Date = .now
+    @State private var newBabyGender: BabyProfile.Gender?
+    @State private var deletionAlert: BabyDeletionAlert?
     @State private var isShowingLibraryPicker = false
     @State private var isShowingCamera = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var capturedImage: UIImage?
 
+    init(
+        babyRepository: BabyRepository,
+        onShowPaywall: (() -> Void)? = nil
+    ) {
+        self.babyRepository = babyRepository
+        self.onShowPaywall = onShowPaywall
+    }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: AppTheme.Spacing.section) {
+                babyListSection
                 avatarSection
                 formSection
                 saveFeedback
@@ -67,6 +84,7 @@ struct BabyProfileView: View {
                         return
                     }
                     avatarPath = nil
+                    refreshBabyListSilently()
                     AppHaptics.lightImpact()
                 }
             }
@@ -79,6 +97,35 @@ struct BabyProfileView: View {
         .sheet(isPresented: $isShowingCamera) {
             SystemImagePicker(image: $capturedImage, sourceType: .camera)
         }
+        .sheet(isPresented: $isShowingCreateBabySheet) {
+            CreateBabySheet(
+                name: $newBabyName,
+                birthDate: $newBabyBirthDate,
+                gender: $newBabyGender,
+                onCancel: { isShowingCreateBabySheet = false },
+                onSave: createBaby
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
+        .alert(item: $deletionAlert) { alert in
+            if let babyID = alert.deleteBabyID {
+                return Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.message),
+                    primaryButton: .destructive(Text(alert.confirmTitle)) {
+                        performDeleteBaby(id: babyID)
+                    },
+                    secondaryButton: .cancel(Text(alert.cancelTitle))
+                )
+            }
+
+            return Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text(alert.confirmTitle))
+            )
+        }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
             Task {
@@ -89,6 +136,7 @@ struct BabyProfileView: View {
                     return
                 }
                 avatarPath = babyRepository.activeBaby?.avatarPath
+                refreshBabyListSilently()
                 selectedPhotoItem = nil
                 AppHaptics.lightImpact()
             }
@@ -100,15 +148,185 @@ struct BabyProfileView: View {
                 return
             }
             avatarPath = babyRepository.activeBaby?.avatarPath
+            refreshBabyListSilently()
             capturedImage = nil
             AppHaptics.lightImpact()
         }
         .onAppear {
-            loadFromRepository()
+            refreshFromRepository()
         }
         .onDisappear {
             errorDismissTask?.cancel()
             errorDismissTask = nil
+        }
+    }
+
+    private var babyListSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.text("shell.profile.babies.title", en: "Babies", zh: "宝宝"))
+                        .font(AppTheme.Typography.cardTitle)
+                        .foregroundStyle(AppTheme.Colors.primaryText)
+
+                    Text(L10n.text(
+                        "shell.profile.babies.detail",
+                        en: "Choose who this moment belongs to.",
+                        zh: "选择现在要记录的宝宝。"
+                    ))
+                    .font(AppTheme.Typography.meta)
+                    .foregroundStyle(AppTheme.Colors.tertiaryText)
+                }
+
+                Spacer()
+
+                Button(action: presentCreateBabySheet) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.Colors.primaryText)
+                        .frame(width: 32, height: 32)
+                        .background(AppTheme.Colors.iconBackground)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.text("shell.profile.add_baby", en: "Add baby", zh: "添加宝宝"))
+            }
+
+            VStack(spacing: 0) {
+                ForEach(babies, id: \.id) { baby in
+                    babyRow(for: baby)
+
+                    if baby.id != babies.last?.id {
+                        Divider()
+                            .overlay(AppTheme.Colors.divider)
+                            .padding(.leading, 54)
+                    }
+                }
+            }
+        }
+        .padding(AppTheme.Spacing.section)
+        .background(AppTheme.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
+        .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+    }
+
+    private func babyRow(for baby: BabyProfile) -> some View {
+        HStack(spacing: 12) {
+            Button(action: { activateBaby(baby) }) {
+                HStack(spacing: 12) {
+                    BabyAvatarView(
+                        avatarPath: baby.avatarPath,
+                        monogram: monogram(for: baby.name),
+                        size: 42
+                    )
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(baby.name)
+                            .font(AppTheme.Typography.sheetBody)
+                            .foregroundStyle(AppTheme.Colors.primaryText)
+                            .lineLimit(1)
+
+                        Text(baby.birthDate.formatted(.dateTime.year().month().day()))
+                            .font(AppTheme.Typography.meta)
+                            .foregroundStyle(AppTheme.Colors.tertiaryText)
+                    }
+
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(baby.isActive)
+
+            if baby.isActive {
+                Text(L10n.text("shell.profile.active_baby", en: "Current", zh: "当前"))
+                    .font(AppTheme.Typography.floatingLabel)
+                    .foregroundStyle(AppTheme.Colors.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.Colors.iconBackground)
+                    .clipShape(Capsule())
+            }
+
+            if babies.count > 1 {
+                Button(action: { presentDeleteAlert(for: baby) }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.Colors.secondaryText)
+                        .frame(width: 32, height: 32)
+                        .background(AppTheme.Colors.cardBackground)
+                        .overlay {
+                            Circle()
+                                .stroke(AppTheme.Colors.divider, lineWidth: 1)
+                        }
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    L10n.text("shell.profile.delete_baby", en: "Delete baby", zh: "删除宝宝")
+                )
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func presentDeleteAlert(for baby: BabyProfile) {
+        let message: String
+        if baby.isActive {
+            message = L10n.text(
+                "shell.profile.delete.active.message",
+                en: "This removes the profile after a quick check. Sprout will switch to another baby on this device.",
+                zh: "删除前会先做一次快速检查。删除后，初长会自动切换到这台设备上的另一个宝宝。"
+            )
+        } else {
+            message = L10n.text(
+                "shell.profile.delete.message",
+                en: "This removes the baby profile after a quick check. Existing records need to be cleared first.",
+                zh: "删除前会先做一次快速检查。若这个宝宝还有记录内容，需要先清理后才能删除。"
+            )
+        }
+
+        deletionAlert = BabyDeletionAlert(
+            title: L10n.text("shell.profile.delete.title", en: "Delete this baby?", zh: "要删除这个宝宝吗？"),
+            message: message,
+            confirmTitle: L10n.text("shell.profile.delete.confirm", en: "Delete", zh: "删除"),
+            cancelTitle: L10n.text("common.cancel", en: "Cancel", zh: "取消"),
+            deleteBabyID: baby.id
+        )
+    }
+
+    private func performDeleteBaby(id: UUID) {
+        switch babyRepository.deleteBabyResult(id: id) {
+        case .success:
+            guard refreshFromRepository(showErrorOnFailure: false) else {
+                showSaveError()
+                return
+            }
+            AppHaptics.lightImpact()
+        case .failure(.onlyRemainingBaby):
+            deletionAlert = BabyDeletionAlert(
+                title: L10n.text("shell.profile.delete.unavailable.title", en: "Keep one baby here", zh: "这里至少保留一个宝宝"),
+                message: L10n.text(
+                    "shell.profile.delete.unavailable.last",
+                    en: "Sprout needs one baby profile to stay ready for quick local recording.",
+                    zh: "为了让本地记录随时可用，初长需要至少保留一个宝宝资料。"
+                ),
+                confirmTitle: L10n.text("common.ok", en: "OK", zh: "知道了")
+            )
+        case .failure(.hasAssociatedData):
+            deletionAlert = BabyDeletionAlert(
+                title: L10n.text("shell.profile.delete.blocked.title", en: "Clear this baby's records first", zh: "请先清理这个宝宝的记录"),
+                message: L10n.text(
+                    "shell.profile.delete.blocked.message",
+                    en: "This profile still has records, growth entries, or memories attached. Remove those first, then try again.",
+                    zh: "这个宝宝下面还有记录、成长条目或珍藏内容。请先清理这些内容，再回来删除。"
+                ),
+                confirmTitle: L10n.text("common.ok", en: "OK", zh: "知道了")
+            )
+        case .failure(.babyNotFound):
+            refreshFromRepository(showErrorOnFailure: false)
+        case .failure:
+            showSaveError()
         }
     }
 
@@ -171,6 +389,7 @@ struct BabyProfileView: View {
                         showSaveError()
                         return
                     }
+                    refreshBabyListSilently()
                 }
         }
         .padding(.vertical, 16)
@@ -195,6 +414,7 @@ struct BabyProfileView: View {
                     showSaveError()
                     return
                 }
+                refreshBabyListSilently()
             }
         }
         .padding(.vertical, 16)
@@ -249,13 +469,87 @@ struct BabyProfileView: View {
                 return
             }
             gender = nil
+            refreshBabyListSilently()
         } else {
             guard babyRepository.updateGender(target) else {
                 showSaveError()
                 return
             }
             gender = target
+            refreshBabyListSilently()
         }
+    }
+
+    private func presentCreateBabySheet() {
+        do {
+            let existingBabyCount = try babyRepository.fetchBabies().count
+            guard subscriptionManager.canCreateAdditionalBaby(existingBabyCount: existingBabyCount) else {
+                showPaywallOrError()
+                return
+            }
+        } catch {
+            showSaveError()
+            return
+        }
+
+        resetCreateDraft()
+        isShowingCreateBabySheet = true
+    }
+
+    private func createBaby() {
+        let previousCount = babies.count
+        let previousActiveBabyID = babyRepository.activeBaby?.id
+
+        let result = babyRepository.createBabyResult(
+            name: newBabyName,
+            birthDate: newBabyBirthDate,
+            gender: newBabyGender
+        )
+
+        switch result {
+        case .success:
+            break
+        case .failure(.entitlementBlocked):
+            isShowingCreateBabySheet = false
+            showPaywallOrError()
+            return
+        case .failure:
+            showSaveError()
+            return
+        }
+
+        guard refreshFromRepository(showErrorOnFailure: false) else {
+            showSaveError()
+            return
+        }
+
+        let activeBabyID = babyRepository.activeBaby?.id
+        guard babies.count > previousCount || activeBabyID != previousActiveBabyID else {
+            showSaveError()
+            return
+        }
+
+        isShowingCreateBabySheet = false
+        resetCreateDraft()
+        AppHaptics.lightImpact()
+    }
+
+    private func activateBaby(_ baby: BabyProfile) {
+        guard !baby.isActive else { return }
+        AppHaptics.selection()
+        guard babyRepository.activateBaby(id: baby.id) else {
+            showSaveError()
+            return
+        }
+        refreshFromRepository()
+    }
+
+    private func showPaywallOrError() {
+        guard let onShowPaywall else {
+            showSaveError()
+            return
+        }
+        onShowPaywall()
     }
 
     @ViewBuilder
@@ -280,7 +574,11 @@ struct BabyProfileView: View {
     }
 
     private func showSaveError() {
-        saveErrorMessage = String(localized: "shell.profile.save_error")
+        saveErrorMessage = L10n.text(
+            "shell.profile.save_error",
+            en: "Couldn’t save that just now. Please try again.",
+            zh: "刚才没有保存成功，请再试一次。"
+        )
         scheduleErrorDismiss()
     }
 
@@ -303,11 +601,181 @@ struct BabyProfileView: View {
         return String(trimmed.first ?? Character("B"))
     }
 
+    @discardableResult
+    private func refreshFromRepository(showErrorOnFailure: Bool = true) -> Bool {
+        do {
+            babies = try babyRepository.fetchBabies()
+            loadFromRepository()
+            return true
+        } catch {
+            if showErrorOnFailure {
+                showSaveError()
+            }
+            return false
+        }
+    }
+
     private func loadFromRepository() {
         guard let baby = babyRepository.activeBaby else { return }
         name = baby.name
         birthDate = baby.birthDate
         gender = baby.gender
         avatarPath = baby.avatarPath
+    }
+
+    private func resetCreateDraft() {
+        newBabyName = ""
+        newBabyBirthDate = .now
+        newBabyGender = nil
+    }
+
+    private func refreshBabyListSilently() {
+        babies = (try? babyRepository.fetchBabies()) ?? babies
+    }
+
+    private func monogram(for babyName: String) -> String {
+        let trimmed = babyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.first ?? Character("B"))
+    }
+}
+
+private struct CreateBabySheet: View {
+    @Binding var name: String
+    @Binding var birthDate: Date
+    @Binding var gender: BabyProfile.Gender?
+
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        BaseRecordSheet(
+            title: L10n.text("shell.profile.create.title", en: "Add a baby", zh: "添加宝宝"),
+            onClose: onCancel
+        ) {
+            VStack(spacing: 14) {
+                nameField
+                birthDateField
+                genderField
+            }
+        } footer: {
+            SheetPrimaryButton(
+                title: L10n.text("common.save", en: "Save", zh: "保存"),
+                isEnabled: canSave,
+                action: onSave
+            )
+            .disabled(!canSave)
+        }
+    }
+
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.text("shell.profile.nickname", en: "Name", zh: "昵称"))
+                .font(AppTheme.Typography.meta)
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+
+            TextField(
+                L10n.text("shell.profile.create.name_placeholder", en: "Baby’s name", zh: "宝宝的名字"),
+                text: $name
+            )
+            .font(AppTheme.Typography.sheetBody)
+            .foregroundStyle(AppTheme.Colors.primaryText)
+            .padding(16)
+            .background(AppTheme.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sheetCard, style: .continuous))
+        }
+    }
+
+    private var birthDateField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.text("shell.sidebar.birth_date", en: "Birth date", zh: "出生日期"))
+                .font(AppTheme.Typography.meta)
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+
+            DatePicker(
+                "",
+                selection: $birthDate,
+                displayedComponents: .date
+            )
+            .labelsHidden()
+            .font(AppTheme.Typography.sheetBody)
+            .tint(AppTheme.Colors.accent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(AppTheme.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.sheetCard, style: .continuous))
+        }
+    }
+
+    private var genderField: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.text("shell.profile.create.gender", en: "Gender (optional)", zh: "性别（可选）"))
+                .font(AppTheme.Typography.meta)
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+
+            HStack(spacing: 10) {
+                genderChip(
+                    label: L10n.text("shell.profile.gender.none", en: "Not set", zh: "暂不设置"),
+                    isSelected: gender == nil,
+                    action: { gender = nil }
+                )
+                genderChip(
+                    label: L10n.text("shell.profile.gender.male", en: "Boy", zh: "男孩"),
+                    isSelected: gender == .male,
+                    action: { gender = .male }
+                )
+                genderChip(
+                    label: L10n.text("shell.profile.gender.female", en: "Girl", zh: "女孩"),
+                    isSelected: gender == .female,
+                    action: { gender = .female }
+                )
+            }
+        }
+    }
+
+    private func genderChip(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: {
+            AppHaptics.selection()
+            action()
+        }) {
+            Text(label)
+                .font(AppTheme.Typography.meta)
+                .foregroundStyle(isSelected ? AppTheme.Colors.cardBackground : AppTheme.Colors.primaryText)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(isSelected ? AppTheme.Colors.accent : AppTheme.Colors.cardBackground)
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(isSelected ? AppTheme.Colors.accent : AppTheme.Colors.divider, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct BabyDeletionAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let confirmTitle: String
+    let cancelTitle: String
+    let deleteBabyID: UUID?
+
+    init(
+        title: String,
+        message: String,
+        confirmTitle: String,
+        cancelTitle: String = "",
+        deleteBabyID: UUID? = nil
+    ) {
+        self.title = title
+        self.message = message
+        self.confirmTitle = confirmTitle
+        self.cancelTitle = cancelTitle
+        self.deleteBabyID = deleteBabyID
     }
 }

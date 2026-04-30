@@ -5,6 +5,22 @@ import UIKit
 
 @MainActor
 final class BabyRepository {
+    enum CreateBabyFailure: Error, Equatable {
+        case entitlementBlocked
+        case persistenceFailed
+    }
+
+    enum DeleteBabyFailure: Error, Equatable {
+        case babyNotFound
+        case onlyRemainingBaby
+        case hasAssociatedData
+        case persistenceFailed
+    }
+
+    struct DeleteBabyOutcome: Equatable {
+        let activeBabyID: UUID
+    }
+
     private let modelContext: ModelContext
     private let canCreateAdditionalBaby: (Int) -> Bool
     private let logger = Logger(subsystem: "sprout", category: "BabyRepository")
@@ -54,11 +70,24 @@ final class BabyRepository {
     }
 
     func createBaby(name: String, birthDate: Date, gender: BabyProfile.Gender? = nil) -> BabyProfile? {
+        switch createBabyResult(name: name, birthDate: birthDate, gender: gender) {
+        case .success(let baby):
+            return baby
+        case .failure:
+            return nil
+        }
+    }
+
+    func createBabyResult(
+        name: String,
+        birthDate: Date,
+        gender: BabyProfile.Gender? = nil
+    ) -> Result<BabyProfile, CreateBabyFailure> {
         do {
             let babies = try fetchBabies()
             guard canCreateAdditionalBaby(babies.count) else {
                 recordFailure(operation: "Create baby", reason: "Multi-baby entitlement is not active")
-                return nil
+                return .failure(.entitlementBlocked)
             }
 
             let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,10 +109,10 @@ final class BabyRepository {
             modelContext.insert(baby)
             try modelContext.save()
             activeBabyState?.updateFrom(baby)
-            return baby
+            return .success(baby)
         } catch {
             recordFailure(operation: "Create baby", error: error)
-            return nil
+            return .failure(.persistenceFailed)
         }
     }
 
@@ -109,6 +138,59 @@ final class BabyRepository {
         } catch {
             recordFailure(operation: "Activate baby", error: error)
             return false
+        }
+    }
+
+    func deleteBabyResult(id: UUID) -> Result<DeleteBabyOutcome, DeleteBabyFailure> {
+        do {
+            let babies = try fetchBabies()
+            guard let targetBaby = babies.first(where: { $0.id == id }) else {
+                recordFailure(operation: "Delete baby", reason: "Baby not found")
+                return .failure(.babyNotFound)
+            }
+            guard babies.count > 1 else {
+                recordFailure(operation: "Delete baby", reason: "Cannot remove the last remaining baby")
+                return .failure(.onlyRemainingBaby)
+            }
+            guard try !hasAssociatedData(for: id) else {
+                recordFailure(operation: "Delete baby", reason: "Associated data still exists")
+                return .failure(.hasAssociatedData)
+            }
+
+            let replacementBaby = babies.first(where: { $0.id != id })
+            guard let replacementBaby else {
+                recordFailure(operation: "Delete baby", reason: "No replacement baby available")
+                return .failure(.onlyRemainingBaby)
+            }
+            let targetAvatarPath = targetBaby.avatarPath
+
+            if targetBaby.isActive {
+                for baby in babies where baby.id != id {
+                    let shouldBeActive = baby.id == replacementBaby.id
+                    guard baby.isActive != shouldBeActive else { continue }
+                    baby.isActive = shouldBeActive
+                    markPendingUpsert(baby)
+                }
+            }
+
+            let tombstone = SyncDeletionTombstone(
+                entityType: .babyProfile,
+                entityID: targetBaby.id,
+                remoteVersion: targetBaby.remoteVersion,
+                readyAfter: .now
+            )
+            modelContext.insert(tombstone)
+            modelContext.delete(targetBaby)
+            try modelContext.save()
+
+            if let targetAvatarPath {
+                deleteAvatarFile(at: targetAvatarPath)
+            }
+            activeBabyState?.updateFrom(replacementBaby)
+            return .success(DeleteBabyOutcome(activeBabyID: replacementBaby.id))
+        } catch {
+            recordFailure(operation: "Delete baby", error: error)
+            return .failure(.persistenceFailed)
         }
     }
 
@@ -244,6 +326,30 @@ final class BabyRepository {
         if baby.syncState != .pendingUpsert {
             baby.syncState = .pendingUpsert
         }
+    }
+
+    private func hasAssociatedData(for babyID: UUID) throws -> Bool {
+        var recordDescriptor = FetchDescriptor<RecordItem>(
+            predicate: #Predicate<RecordItem> { $0.babyID == babyID }
+        )
+        recordDescriptor.fetchLimit = 1
+        if try !modelContext.fetch(recordDescriptor).isEmpty {
+            return true
+        }
+
+        var memoryDescriptor = FetchDescriptor<MemoryEntry>(
+            predicate: #Predicate<MemoryEntry> { $0.babyID == babyID }
+        )
+        memoryDescriptor.fetchLimit = 1
+        if try !modelContext.fetch(memoryDescriptor).isEmpty {
+            return true
+        }
+
+        var milestoneDescriptor = FetchDescriptor<GrowthMilestoneEntry>(
+            predicate: #Predicate<GrowthMilestoneEntry> { $0.babyID == babyID }
+        )
+        milestoneDescriptor.fetchLimit = 1
+        return try !modelContext.fetch(milestoneDescriptor).isEmpty
     }
 
     private var avatarDirectoryURL: URL {

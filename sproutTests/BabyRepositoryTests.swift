@@ -181,6 +181,25 @@ struct BabyRepositoryTests {
         #expect(babies.first?.name == firstBaby.name)
     }
 
+    @Test("typed create result exposes entitlement-blocked failure reason")
+    func createBabyResultExposesEntitlementBlockedFailureReason() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = BabyRepository(
+            modelContext: env.modelContext,
+            canCreateAdditionalBaby: { existingBabyCount in existingBabyCount == 0 }
+        )
+        #expect(repo.createDefaultIfNeeded() == true)
+
+        let result = repo.createBabyResult(name: "小栗子", birthDate: env.now.value)
+
+        switch result {
+        case .success:
+            Issue.record("Expected entitlement-blocked failure, but createBabyResult succeeded")
+        case .failure(let failure):
+            #expect(failure == .entitlementBlocked)
+        }
+    }
+
     @Test("expired entitlement preserves existing babies but blocks adding another")
     func expiredEntitlementBlocksAdditionalBabyWithoutDeletingExistingData() async throws {
         let env = try makeTestEnvironment(now: .now)
@@ -198,6 +217,159 @@ struct BabyRepositoryTests {
         #expect(thirdBaby == nil)
         #expect(babies.count == 2)
         #expect(babies.contains { $0.id == secondBaby.id })
+    }
+
+    @Test("createBabyResult normalizes blank names to the default placeholder")
+    func createBabyResultFallsBackToDefaultPlaceholderName() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+
+        let result = repo.createBabyResult(name: "  \n\t  ", birthDate: env.now.value)
+
+        let baby: BabyProfile
+        switch result {
+        case .success(let createdBaby):
+            baby = createdBaby
+        case .failure(let failure):
+            Issue.record("Expected createBabyResult to succeed, got failure: \(failure)")
+            return
+        }
+
+        #expect(baby.name == BabyProfile.defaultName)
+        #expect(baby.isActive == true)
+    }
+
+    @Test("deleteBabyResult removes an inactive baby and writes a tombstone")
+    func deleteBabyResultRemovesInactiveBabyAndWritesTombstone() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let firstBaby = try #require(repo.activeBaby)
+        let secondBaby = try #require(repo.createBaby(name: "小栗子", birthDate: env.now.value))
+
+        let result = repo.deleteBabyResult(id: firstBaby.id)
+
+        switch result {
+        case .success:
+            break
+        case .failure(let failure):
+            Issue.record("Expected deleteBabyResult to succeed, got failure: \(failure)")
+            return
+        }
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.count == 1)
+        #expect(babies.first?.id == secondBaby.id)
+
+        let tombstones = try env.modelContext.fetch(FetchDescriptor<SyncDeletionTombstone>())
+        #expect(tombstones.count == 1)
+        #expect(tombstones.first?.entityType == .babyProfile)
+        #expect(tombstones.first?.entityID == firstBaby.id)
+    }
+
+    @Test("deleteBabyResult removes the deleted baby's local avatar file")
+    func deleteBabyResultRemovesDeletedBabyAvatarFile() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let firstBaby = try #require(repo.activeBaby)
+        _ = try #require(repo.createBaby(name: "小栗子", birthDate: env.now.value))
+        let avatarURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sprout-avatar-\(UUID().uuidString).jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: avatarURL, options: .atomic)
+        firstBaby.avatarPath = avatarURL.path
+        try env.modelContext.save()
+
+        let result = repo.deleteBabyResult(id: firstBaby.id)
+
+        switch result {
+        case .success:
+            break
+        case .failure(let failure):
+            Issue.record("Expected deleteBabyResult to succeed, got failure: \(failure)")
+            return
+        }
+
+        #expect(FileManager.default.fileExists(atPath: avatarURL.path) == false)
+    }
+
+    @Test("deleteBabyResult switches active baby when deleting the current baby")
+    func deleteBabyResultSwitchesActiveBabyWhenDeletingCurrentBaby() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let state = ActiveBabyState()
+        let repo = env.makeBabyRepository(activeBabyState: state)
+        #expect(repo.createDefaultIfNeeded() == true)
+        let firstBaby = try #require(repo.activeBaby)
+        let secondBaby = try #require(repo.createBaby(name: "小栗子", birthDate: env.now.value))
+        #expect(repo.activateBaby(id: firstBaby.id) == true)
+
+        let result = repo.deleteBabyResult(id: firstBaby.id)
+
+        switch result {
+        case .success(let outcome):
+            #expect(outcome.activeBabyID == secondBaby.id)
+        case .failure(let failure):
+            Issue.record("Expected deleteBabyResult to succeed, got failure: \(failure)")
+            return
+        }
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.count == 1)
+        #expect(babies.first?.id == secondBaby.id)
+        #expect(repo.activeBaby?.id == secondBaby.id)
+        #expect(state.headerConfig.babyID == secondBaby.id)
+    }
+
+    @Test("deleteBabyResult blocks removing the last remaining baby")
+    func deleteBabyResultBlocksRemovingLastRemainingBaby() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let baby = try #require(repo.activeBaby)
+
+        let result = repo.deleteBabyResult(id: baby.id)
+
+        switch result {
+        case .success:
+            Issue.record("Expected deleteBabyResult to fail for the last remaining baby")
+        case .failure(let failure):
+            #expect(failure == .onlyRemainingBaby)
+        }
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.count == 1)
+        #expect(babies.first?.id == baby.id)
+    }
+
+    @Test("deleteBabyResult blocks removing a baby that still has associated data")
+    func deleteBabyResultBlocksRemovingBabyWithAssociatedData() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let firstBaby = try #require(repo.activeBaby)
+        _ = try #require(repo.createBaby(name: "小栗子", birthDate: env.now.value))
+
+        let record = RecordItem(
+            babyID: firstBaby.id,
+            timestamp: env.now.value,
+            type: RecordType.milk.rawValue
+        )
+        env.modelContext.insert(record)
+        try env.modelContext.save()
+
+        let result = repo.deleteBabyResult(id: firstBaby.id)
+
+        switch result {
+        case .success:
+            Issue.record("Expected deleteBabyResult to fail when associated data still exists")
+        case .failure(let failure):
+            #expect(failure == .hasAssociatedData)
+        }
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.contains { $0.id == firstBaby.id })
+        let tombstones = try env.modelContext.fetch(FetchDescriptor<SyncDeletionTombstone>())
+        #expect(tombstones.isEmpty)
     }
 
     @Test("activateBaby switches the active baby and syncs header state")

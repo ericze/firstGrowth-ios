@@ -3015,6 +3015,7 @@
       }
     },
     "shell.profile.save_error" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

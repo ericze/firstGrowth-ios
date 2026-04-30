@@ -30,7 +30,10 @@ struct SidebarDrawer: View {
             .navigationDestination(for: SidebarRoute.self) { route in
                 switch route {
                 case .babyProfile:
-                    BabyProfileView(babyRepository: babyRepository)
+                    BabyProfileView(
+                        babyRepository: babyRepository,
+                        onShowPaywall: onShowPaywall
+                    )
                 case .language:
                     LanguageRegionView()
                 case .account:
