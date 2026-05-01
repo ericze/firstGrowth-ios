@@ -15,6 +15,8 @@ final class RecordItem {
     var remoteImagePath: String?
     var remoteVersion: Int64?
     var syncStateRaw: String
+    var createdByUserID: UUID?
+    var updatedByUserID: UUID?
     var aiSummary: String?
     var tags: [String]?
     var note: String?
@@ -32,6 +34,8 @@ final class RecordItem {
         remoteImagePath: String? = nil,
         remoteVersion: Int64? = nil,
         syncStateRaw: String = SyncState.pendingUpsert.rawValue,
+        createdByUserID: UUID? = nil,
+        updatedByUserID: UUID? = nil,
         aiSummary: String? = nil,
         tags: [String]? = nil,
         note: String? = nil
@@ -48,6 +52,8 @@ final class RecordItem {
         self.remoteImagePath = remoteImagePath
         self.remoteVersion = remoteVersion
         self.syncStateRaw = syncStateRaw
+        self.createdByUserID = createdByUserID
+        self.updatedByUserID = updatedByUserID
         self.aiSummary = aiSummary
         self.tags = tags
         self.note = note

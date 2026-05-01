@@ -14,6 +14,8 @@ final class GrowthMilestoneEntry {
     var remoteImagePath: String?
     var remoteVersion: Int64?
     var syncStateRaw: String
+    var createdByUserID: UUID?
+    var updatedByUserID: UUID?
     var isCustom: Bool
     var createdAt: Date
     var updatedAt: Date
@@ -35,6 +37,8 @@ final class GrowthMilestoneEntry {
         remoteImagePath: String? = nil,
         remoteVersion: Int64? = nil,
         syncStateRaw: String = SyncState.pendingUpsert.rawValue,
+        createdByUserID: UUID? = nil,
+        updatedByUserID: UUID? = nil,
         isCustom: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -50,6 +54,8 @@ final class GrowthMilestoneEntry {
         self.remoteImagePath = remoteImagePath
         self.remoteVersion = remoteVersion
         self.syncStateRaw = syncStateRaw
+        self.createdByUserID = createdByUserID
+        self.updatedByUserID = updatedByUserID
         self.isCustom = isCustom
         self.createdAt = createdAt
         self.updatedAt = updatedAt

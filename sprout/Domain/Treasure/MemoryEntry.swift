@@ -11,6 +11,8 @@ final class MemoryEntry {
     var remoteImagePathsPayload: String?
     var remoteVersion: Int64?
     var syncStateRaw: String
+    var createdByUserID: UUID?
+    var updatedByUserID: UUID?
     var note: String?
     var isMilestone: Bool
 
@@ -38,6 +40,8 @@ final class MemoryEntry {
         remoteImagePathsPayload: String? = nil,
         remoteVersion: Int64? = nil,
         syncStateRaw: String = SyncState.pendingUpsert.rawValue,
+        createdByUserID: UUID? = nil,
+        updatedByUserID: UUID? = nil,
         note: String? = nil,
         isMilestone: Bool = false
     ) {
@@ -49,6 +53,8 @@ final class MemoryEntry {
         self.remoteImagePathsPayload = remoteImagePathsPayload
         self.remoteVersion = remoteVersion
         self.syncStateRaw = syncStateRaw
+        self.createdByUserID = createdByUserID
+        self.updatedByUserID = updatedByUserID
         self.note = note
         self.isMilestone = isMilestone
     }
