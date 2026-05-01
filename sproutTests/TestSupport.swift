@@ -16,6 +16,19 @@ struct TestEnvironment {
     func makeBabyRepository(activeBabyState: ActiveBabyState? = nil) -> BabyRepository {
         BabyRepository(modelContext: modelContext, activeBabyState: activeBabyState)
     }
+
+    func makeFamilyGroupRepository(
+        nowProvider: @escaping () -> Date = { .now },
+        inviteCodeGenerator: @escaping () -> String = {
+            UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).uppercased()
+        }
+    ) -> FamilyGroupRepository {
+        FamilyGroupRepository(
+            modelContext: modelContext,
+            nowProvider: nowProvider,
+            inviteCodeGenerator: inviteCodeGenerator
+        )
+    }
 }
 
 @MainActor
@@ -112,6 +125,26 @@ func makeGrowthStore(
         productConfig: productConfig,
         calendar: calendar,
         dateProvider: { environment.now.value }
+    )
+}
+
+@MainActor
+func makeFamilyGroupStore(
+    environment: TestEnvironment,
+    authManager: AuthManager,
+    subscriptionManager: SubscriptionManager,
+    nowProvider: @escaping () -> Date = { .now },
+    inviteCodeGenerator: @escaping () -> String = {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).uppercased()
+    }
+) -> FamilyGroupStore {
+    FamilyGroupStore(
+        authManager: authManager,
+        subscriptionManager: subscriptionManager,
+        repository: environment.makeFamilyGroupRepository(
+            nowProvider: nowProvider,
+            inviteCodeGenerator: inviteCodeGenerator
+        )
     )
 }
 

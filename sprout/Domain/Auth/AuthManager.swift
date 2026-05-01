@@ -39,6 +39,10 @@ final class AuthManager {
     var authState: AuthState = .unauthenticated
     private(set) var linkedUserID: UUID?
 
+    var currentUserID: UUID? {
+        currentUser?.id
+    }
+
     init(
         supabaseService: any SupabaseServicing,
         defaults: UserDefaults = .standard,
