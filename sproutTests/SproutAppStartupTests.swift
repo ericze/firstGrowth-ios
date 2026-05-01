@@ -174,6 +174,26 @@ struct SproutAppStartupTests {
             )
             context.insert(milestone)
 
+            let ownerID = UUID()
+            let sharedBabyID = UUID()
+            let member = FamilyMemberSnapshot(
+                userID: UUID(),
+                role: .member,
+                joinedAt: .now,
+                removedAt: nil
+            )
+            let family = FamilyGroup(
+                ownerUserID: ownerID,
+                inviteCode: "SPROUT42",
+                inviteExpiresAt: .now.addingTimeInterval(3600),
+                inviteState: .active,
+                sharedBabyIDs: [sharedBabyID],
+                memberPayloads: [member],
+                remoteVersion: 7,
+                syncStateRaw: SyncState.synced.rawValue
+            )
+            context.insert(family)
+
             try context.save()
 
             let fetchedRecords = try context.fetch(FetchDescriptor<RecordItem>())
@@ -194,9 +214,117 @@ struct SproutAppStartupTests {
             let fetchedMilestones = try context.fetch(FetchDescriptor<GrowthMilestoneEntry>())
             #expect(fetchedMilestones.count == 1)
 
+            let fetchedFamilies = try context.fetch(FetchDescriptor<FamilyGroup>())
+            #expect(fetchedFamilies.count == 1)
+            #expect(fetchedFamilies.first?.ownerUserID == ownerID)
+            #expect(fetchedFamilies.first?.inviteCode == "SPROUT42")
+            #expect(fetchedFamilies.first?.inviteState == .active)
+            #expect(fetchedFamilies.first?.sharedBabyIDs == [sharedBabyID])
+            #expect(fetchedFamilies.first?.memberPayloads == [member])
+            #expect(fetchedFamilies.first?.remoteVersion == 7)
+            #expect(fetchedFamilies.first?.syncState == .synced)
+
         case .failure(let message):
             Issue.record(Comment(rawValue: "Schema test failed: \(message)"))
         }
+    }
+
+    @Test("V3 to V4 migration preserves WeeklyLetter metadata and defaults legacy authorship")
+    func testV3ToV4MigrationPreservesWeeklyLetterMetadataAndDefaultsAuthorship() async throws {
+        let storeURL = try Self.makeTemporaryStoreURL(named: "v3-to-v4-migration")
+        defer {
+            try? FileManager.default.removeItem(at: storeURL.deletingLastPathComponent())
+        }
+
+        let babyID = UUID()
+        let letterID = UUID()
+        let recordID = UUID()
+        let memoryID = UUID()
+        let milestoneID = UUID()
+        let weekStart = Date(timeIntervalSince1970: 1_714_614_400)
+        let weekEnd = Date(timeIntervalSince1970: 1_715_219_200)
+        let generatedAt = Date(timeIntervalSince1970: 1_715_200_000)
+
+        try Self.seedV3Store(
+            at: storeURL,
+            babyID: babyID,
+            letterID: letterID,
+            recordID: recordID,
+            memoryID: memoryID,
+            milestoneID: milestoneID,
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            generatedAt: generatedAt
+        )
+
+        let schema = SproutSchemaRegistry.schema
+        let configuration = ModelConfiguration(schema: schema, url: storeURL)
+        let container = try ModelContainer(
+            for: schema,
+            migrationPlan: SproutMigrationPlan.self,
+            configurations: [configuration]
+        )
+        let context = ModelContext(container)
+
+        let letters = try context.fetch(FetchDescriptor<WeeklyLetter>())
+        #expect(letters.count == 1)
+        let migratedLetter = try #require(letters.first)
+        #expect(migratedLetter.id == letterID)
+        #expect(migratedLetter.weekStart == weekStart)
+        #expect(migratedLetter.weekEnd == weekEnd)
+        #expect(migratedLetter.languageCode == "zh-Hans")
+        #expect(migratedLetter.sourceSignature == "source-v3")
+        #expect(migratedLetter.generatedBy == "composer-v3")
+        #expect(migratedLetter.generatedAt == generatedAt)
+
+        let migratedRecord = try #require(try context.fetch(FetchDescriptor<RecordItem>()).first)
+        #expect(migratedRecord.id == recordID)
+        #expect(migratedRecord.createdByUserID == nil)
+        #expect(migratedRecord.updatedByUserID == nil)
+
+        let migratedMemory = try #require(try context.fetch(FetchDescriptor<MemoryEntry>()).first)
+        #expect(migratedMemory.id == memoryID)
+        #expect(migratedMemory.createdByUserID == nil)
+        #expect(migratedMemory.updatedByUserID == nil)
+
+        let migratedMilestone = try #require(try context.fetch(FetchDescriptor<GrowthMilestoneEntry>()).first)
+        #expect(migratedMilestone.id == milestoneID)
+        #expect(migratedMilestone.createdByUserID == nil)
+        #expect(migratedMilestone.updatedByUserID == nil)
+    }
+
+    @Test("V2 and V3 WeeklyLetter snapshots include persisted metadata fields")
+    func testHistoricalWeeklyLetterSnapshotsIncludeMetadataFields() {
+        let generatedAt = Date(timeIntervalSince1970: 1_715_200_000)
+        let v2Letter = SproutSchemaV2.WeeklyLetter(
+            weekStart: Date(timeIntervalSince1970: 1_714_614_400),
+            weekEnd: Date(timeIntervalSince1970: 1_715_219_200),
+            density: .normal,
+            collapsedText: "v2 collapsed",
+            expandedText: "v2 expanded",
+            languageCode: "en",
+            sourceSignature: "source-v2",
+            generatedBy: "composer-v2",
+            generatedAt: generatedAt
+        )
+        let v3Letter = SproutSchemaV3.WeeklyLetter(
+            weekStart: Date(timeIntervalSince1970: 1_714_614_400),
+            weekEnd: Date(timeIntervalSince1970: 1_715_219_200),
+            density: .normal,
+            collapsedText: "v3 collapsed",
+            expandedText: "v3 expanded",
+            languageCode: "zh-Hans",
+            sourceSignature: "source-v3",
+            generatedBy: "composer-v3",
+            generatedAt: generatedAt
+        )
+
+        #expect(v2Letter.languageCode == "en")
+        #expect(v2Letter.sourceSignature == "source-v2")
+        #expect(v2Letter.generatedBy == "composer-v2")
+        #expect(v3Letter.languageCode == "zh-Hans")
+        #expect(v3Letter.sourceSignature == "source-v3")
+        #expect(v3Letter.generatedBy == "composer-v3")
     }
 
     @Test("Migration plan does not repeat the same model shape across versions")
@@ -248,5 +376,83 @@ struct SproutAppStartupTests {
             }
         }
         return count
+    }
+
+    private static func makeTemporaryStoreURL(named name: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sprout-tests-\(name)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("default.store")
+    }
+
+    private static func seedV3Store(
+        at storeURL: URL,
+        babyID: UUID,
+        letterID: UUID,
+        recordID: UUID,
+        memoryID: UUID,
+        milestoneID: UUID,
+        weekStart: Date,
+        weekEnd: Date,
+        generatedAt: Date
+    ) throws {
+        let schema = Schema(SproutSchemaV3.models, version: SproutSchemaV3.versionIdentifier)
+        let configuration = ModelConfiguration(schema: schema, url: storeURL)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = ModelContext(container)
+
+        context.insert(
+            SproutSchemaV3.BabyProfile(
+                id: babyID,
+                name: "Sprout",
+                birthDate: Date(timeIntervalSince1970: 1_700_000_000),
+                createdAt: Date(timeIntervalSince1970: 1_700_000_001)
+            )
+        )
+        context.insert(
+            SproutSchemaV3.RecordItem(
+                id: recordID,
+                babyID: babyID,
+                timestamp: Date(timeIntervalSince1970: 1_714_700_000),
+                type: "milk",
+                value: 120
+            )
+        )
+        context.insert(
+            SproutSchemaV3.MemoryEntry(
+                id: memoryID,
+                babyID: babyID,
+                createdAt: Date(timeIntervalSince1970: 1_714_800_000),
+                ageInDays: 42,
+                imageLocalPath: "memory.jpg",
+                note: "legacy memory",
+                isMilestone: false
+            )
+        )
+        context.insert(
+            SproutSchemaV3.WeeklyLetter(
+                id: letterID,
+                weekStart: weekStart,
+                weekEnd: weekEnd,
+                density: .normal,
+                collapsedText: "collapsed",
+                expandedText: "expanded",
+                languageCode: "zh-Hans",
+                sourceSignature: "source-v3",
+                generatedBy: "composer-v3",
+                generatedAt: generatedAt
+            )
+        )
+        context.insert(
+            SproutSchemaV3.GrowthMilestoneEntry(
+                id: milestoneID,
+                babyID: babyID,
+                title: "Roll over",
+                category: "motor",
+                occurredAt: Date(timeIntervalSince1970: 1_714_900_000)
+            )
+        )
+
+        try context.save()
     }
 }
