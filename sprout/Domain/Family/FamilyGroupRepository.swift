@@ -103,7 +103,7 @@ final class FamilyGroupRepository {
         logger.error("\(operation, privacy: .public) failed: \(String(describing: error), privacy: .public)")
     }
 
-    private static func defaultInviteCode() -> String {
+    nonisolated private static func defaultInviteCode() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).uppercased()
     }
 }

@@ -390,6 +390,127 @@ struct BabyRepositoryTests {
         #expect(state.headerConfig.babyID == firstBaby.id)
     }
 
+    @Test("fetchAccessibleBabies separates owned and shared babies for family members")
+    func fetchAccessibleBabiesSeparatesOwnedAndSharedForMembers() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository()
+        let memberID = UUID()
+        let ownerID = UUID()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let ownedBaby = try #require(repo.activeBaby)
+        let sharedBaby = BabyProfile(
+            name: "Shared",
+            birthDate: env.now.value,
+            createdAt: env.now.value.addingTimeInterval(60),
+            isActive: false
+        )
+        env.modelContext.insert(sharedBaby)
+        env.modelContext.insert(
+            FamilyGroup(
+                ownerUserID: ownerID,
+                sharedBabyIDs: [sharedBaby.id],
+                memberPayloads: [
+                    FamilyMemberSnapshot(userID: memberID, role: .member, joinedAt: env.now.value, removedAt: nil)
+                ],
+                createdAt: env.now.value,
+                updatedAt: env.now.value
+            )
+        )
+        try env.modelContext.save()
+
+        let groups = try repo.fetchAccessibleBabies(for: memberID)
+
+        #expect(groups.owned.map(\.id) == [ownedBaby.id])
+        #expect(groups.shared.map(\.id) == [sharedBaby.id])
+        #expect(try repo.access(for: sharedBaby.id, currentUserID: memberID)?.ownership == .shared(ownerUserID: ownerID))
+    }
+
+    @Test("createBabyResult counts only owned babies for entitlement when shared babies exist")
+    func createBabyResultCountsOnlyOwnedBabiesForEntitlementWhenSharedBabiesExist() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let repo = env.makeBabyRepository(canCreateAdditionalBaby: { $0 < 2 })
+        let memberID = UUID()
+        let ownerID = UUID()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let sharedBaby = BabyProfile(
+            name: "Shared",
+            birthDate: env.now.value,
+            createdAt: env.now.value.addingTimeInterval(60),
+            isActive: false
+        )
+        env.modelContext.insert(sharedBaby)
+        env.modelContext.insert(
+            FamilyGroup(
+                ownerUserID: ownerID,
+                sharedBabyIDs: [sharedBaby.id],
+                memberPayloads: [
+                    FamilyMemberSnapshot(userID: memberID, role: .member, joinedAt: env.now.value, removedAt: nil)
+                ],
+                createdAt: env.now.value,
+                updatedAt: env.now.value
+            )
+        )
+        try env.modelContext.save()
+
+        let result = repo.createBabyResult(
+            name: "Second Owned",
+            birthDate: env.now.value,
+            currentUserID: memberID
+        )
+
+        let createdBaby: BabyProfile
+        switch result {
+        case .success(let baby):
+            createdBaby = baby
+        case .failure(let failure):
+            Issue.record("Expected createBabyResult to succeed, got failure: \(failure)")
+            return
+        }
+
+        let groups = try repo.fetchAccessibleBabies(for: memberID)
+        #expect(createdBaby.name == "Second Owned")
+        #expect(groups.owned.count == 2)
+        #expect(groups.shared.map(\.id) == [sharedBaby.id])
+    }
+
+    @Test("activateAccessibleBaby selects shared baby without changing persisted owned active baby")
+    func activateAccessibleBabySelectsSharedBabyWithoutChangingPersistedActiveBaby() async throws {
+        let env = try makeTestEnvironment(now: .now)
+        let state = ActiveBabyState()
+        let repo = env.makeBabyRepository(activeBabyState: state)
+        let memberID = UUID()
+        let ownerID = UUID()
+        #expect(repo.createDefaultIfNeeded() == true)
+        let ownedBaby = try #require(repo.activeBaby)
+        let sharedBaby = BabyProfile(
+            name: "Shared",
+            birthDate: env.now.value,
+            createdAt: env.now.value.addingTimeInterval(60),
+            isActive: false
+        )
+        env.modelContext.insert(sharedBaby)
+        env.modelContext.insert(
+            FamilyGroup(
+                ownerUserID: ownerID,
+                sharedBabyIDs: [sharedBaby.id],
+                memberPayloads: [
+                    FamilyMemberSnapshot(userID: memberID, role: .member, joinedAt: env.now.value, removedAt: nil)
+                ],
+                createdAt: env.now.value,
+                updatedAt: env.now.value
+            )
+        )
+        try env.modelContext.save()
+
+        #expect(repo.activateAccessibleBaby(id: sharedBaby.id, currentUserID: memberID) == true)
+
+        let babies = try repo.fetchBabies()
+        #expect(babies.first { $0.id == ownedBaby.id }?.isActive == true)
+        #expect(babies.first { $0.id == sharedBaby.id }?.isActive == false)
+        #expect(state.headerConfig.babyID == sharedBaby.id)
+        #expect(state.activeBabyAccess?.ownership == .shared(ownerUserID: ownerID))
+    }
+
     @Test("update methods fail safely when no active baby exists")
     func testUpdateMethodsFailWhenNoActiveBaby() async throws {
         let env = try makeTestEnvironment(now: .now)

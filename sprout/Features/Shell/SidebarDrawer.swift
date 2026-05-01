@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarDrawer: View {
     let headerConfig: HomeHeaderConfig
     let babyRepository: BabyRepository
+    @Bindable var familyGroupStore: FamilyGroupStore
     let onShowPaywall: () -> Void
     @Binding var isNavigationAtRoot: Bool
     @Binding var isSidebarOpen: Bool
@@ -43,7 +44,10 @@ struct SidebarDrawer: View {
                         navigationPath.append(SidebarRoute.account)
                     })
                 case .familyGroup:
-                    FamilyGroupPlaceholderView()
+                    FamilyGroupView(
+                        store: familyGroupStore,
+                        babyRepository: babyRepository
+                    )
                 }
             }
         }

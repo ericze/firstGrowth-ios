@@ -12,6 +12,7 @@ struct AppShellView: View {
     @Bindable var growthStore: GrowthStore
     @Bindable var treasureStore: TreasureStore
     @Bindable var activeBabyState: ActiveBabyState
+    @Bindable var familyGroupStore: FamilyGroupStore
 
     @State private var showSidebar = false
     @State private var isNavigationAtRoot = true
@@ -36,6 +37,7 @@ struct AppShellView: View {
         growthStore: GrowthStore,
         treasureStore: TreasureStore,
         activeBabyState: ActiveBabyState,
+        familyGroupStore: FamilyGroupStore,
         initialTab: HomeModule = .record
     ) {
         self.babyRepository = babyRepository
@@ -43,6 +45,7 @@ struct AppShellView: View {
         self.growthStore = growthStore
         self.treasureStore = treasureStore
         self.activeBabyState = activeBabyState
+        self.familyGroupStore = familyGroupStore
         _selectedTab = State(initialValue: initialTab)
     }
 
@@ -155,6 +158,7 @@ struct AppShellView: View {
             SidebarDrawer(
                 headerConfig: activeBabyState.headerConfig,
                 babyRepository: babyRepository,
+                familyGroupStore: familyGroupStore,
                 onShowPaywall: { showPaywall = true },
                 isNavigationAtRoot: $isNavigationAtRoot,
                 isSidebarOpen: $showSidebar

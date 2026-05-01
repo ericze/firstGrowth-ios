@@ -13,8 +13,15 @@ struct TestEnvironment {
     let defaults: UserDefaults
     let localizationService: LocalizationService
 
-    func makeBabyRepository(activeBabyState: ActiveBabyState? = nil) -> BabyRepository {
-        BabyRepository(modelContext: modelContext, activeBabyState: activeBabyState)
+    func makeBabyRepository(
+        activeBabyState: ActiveBabyState? = nil,
+        canCreateAdditionalBaby: @escaping (Int) -> Bool = { _ in true }
+    ) -> BabyRepository {
+        BabyRepository(
+            modelContext: modelContext,
+            activeBabyState: activeBabyState,
+            canCreateAdditionalBaby: canCreateAdditionalBaby
+        )
     }
 
     func makeFamilyGroupRepository(

@@ -21,6 +21,13 @@ final class BabyRepository {
         let activeBabyID: UUID
     }
 
+    struct AccessibleBabyGroups {
+        let owned: [BabyProfile]
+        let shared: [BabyProfile]
+
+        static let empty = AccessibleBabyGroups(owned: [], shared: [])
+    }
+
     private let modelContext: ModelContext
     private let canCreateAdditionalBaby: (Int) -> Bool
     private let logger = Logger(subsystem: "sprout", category: "BabyRepository")
@@ -38,11 +45,19 @@ final class BabyRepository {
 
     var activeBaby: BabyProfile? {
         do {
+            if let selectedID = activeBabyState?.headerConfig.babyID,
+               let selectedBaby = try fetchBaby(id: selectedID) {
+                return selectedBaby
+            }
             return try fetchActiveBaby()
         } catch {
             recordFailure(operation: "Fetch active baby", error: error)
             return nil
         }
+    }
+
+    var activeBabyAccess: FamilyBabyAccess? {
+        activeBabyState?.activeBabyAccess
     }
 
     @discardableResult
@@ -69,8 +84,26 @@ final class BabyRepository {
         return try modelContext.fetch(descriptor)
     }
 
-    func createBaby(name: String, birthDate: Date, gender: BabyProfile.Gender? = nil) -> BabyProfile? {
-        switch createBabyResult(name: name, birthDate: birthDate, gender: gender) {
+    func fetchAccessibleBabies(for currentUserID: UUID?) throws -> AccessibleBabyGroups {
+        let babies = try fetchBabies()
+        guard let currentUserID else {
+            return AccessibleBabyGroups(owned: babies, shared: [])
+        }
+
+        let sharedIDs = try sharedBabyOwnerMap(for: currentUserID)
+        return AccessibleBabyGroups(
+            owned: babies.filter { sharedIDs[$0.id] == nil },
+            shared: babies.filter { sharedIDs[$0.id] != nil }
+        )
+    }
+
+    func createBaby(
+        name: String,
+        birthDate: Date,
+        gender: BabyProfile.Gender? = nil,
+        currentUserID: UUID? = nil
+    ) -> BabyProfile? {
+        switch createBabyResult(name: name, birthDate: birthDate, gender: gender, currentUserID: currentUserID) {
         case .success(let baby):
             return baby
         case .failure:
@@ -81,11 +114,13 @@ final class BabyRepository {
     func createBabyResult(
         name: String,
         birthDate: Date,
-        gender: BabyProfile.Gender? = nil
+        gender: BabyProfile.Gender? = nil,
+        currentUserID: UUID? = nil
     ) -> Result<BabyProfile, CreateBabyFailure> {
         do {
             let babies = try fetchBabies()
-            guard canCreateAdditionalBaby(babies.count) else {
+            let entitlementBabyCount = try ownedBabyCount(in: babies, currentUserID: currentUserID)
+            guard canCreateAdditionalBaby(entitlementBabyCount) else {
                 recordFailure(operation: "Create baby", reason: "Multi-baby entitlement is not active")
                 return .failure(.entitlementBlocked)
             }
@@ -133,12 +168,46 @@ final class BabyRepository {
             }
 
             try modelContext.save()
-            activeBabyState?.updateFrom(targetBaby)
+            activeBabyState?.updateFrom(
+                targetBaby,
+                access: FamilyBabyAccess(babyID: targetBaby.id, ownership: .owned)
+            )
             return true
         } catch {
             recordFailure(operation: "Activate baby", error: error)
             return false
         }
+    }
+
+    @discardableResult
+    func activateAccessibleBaby(id: UUID, currentUserID: UUID?) -> Bool {
+        do {
+            guard let targetBaby = try fetchBaby(id: id) else {
+                recordFailure(operation: "Activate accessible baby", reason: "Baby not found")
+                return false
+            }
+            if let currentUserID,
+               let ownerID = try sharedBabyOwnerMap(for: currentUserID)[id] {
+                activeBabyState?.updateFrom(
+                    targetBaby,
+                    access: FamilyBabyAccess(babyID: targetBaby.id, ownership: .shared(ownerUserID: ownerID))
+                )
+                return true
+            }
+            return activateBaby(id: id)
+        } catch {
+            recordFailure(operation: "Activate accessible baby", error: error)
+            return false
+        }
+    }
+
+    func access(for babyID: UUID, currentUserID: UUID?) throws -> FamilyBabyAccess? {
+        guard try fetchBaby(id: babyID) != nil else { return nil }
+        if let currentUserID,
+           let ownerID = try sharedBabyOwnerMap(for: currentUserID)[babyID] {
+            return FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID))
+        }
+        return FamilyBabyAccess(babyID: babyID, ownership: .owned)
     }
 
     func deleteBabyResult(id: UUID) -> Result<DeleteBabyOutcome, DeleteBabyFailure> {
@@ -312,6 +381,37 @@ final class BabyRepository {
         )
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchBaby(id: UUID) throws -> BabyProfile? {
+        var descriptor = FetchDescriptor<BabyProfile>(
+            predicate: #Predicate<BabyProfile> { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func ownedBabyCount(in babies: [BabyProfile], currentUserID: UUID?) throws -> Int {
+        guard let currentUserID else { return babies.count }
+        let sharedIDs = try sharedBabyOwnerMap(for: currentUserID)
+        return babies.filter { sharedIDs[$0.id] == nil }.count
+    }
+
+    private func sharedBabyOwnerMap(for currentUserID: UUID) throws -> [UUID: UUID] {
+        let groups = try modelContext.fetch(FetchDescriptor<FamilyGroup>())
+        var ownerByBabyID: [UUID: UUID] = [:]
+
+        for group in groups where group.ownerUserID != currentUserID {
+            let isActiveMember = group.memberPayloads.contains { snapshot in
+                snapshot.userID == currentUserID && snapshot.removedAt == nil
+            }
+            guard isActiveMember else { continue }
+            for babyID in group.sharedBabyIDs {
+                ownerByBabyID[babyID] = group.ownerUserID
+            }
+        }
+
+        return ownerByBabyID
     }
 
     private func recordFailure(operation: String, error: Error) {

@@ -11,7 +11,7 @@ final class FamilyGroupStore {
         case member
     }
 
-    enum Failure: LocalizedError, Equatable {
+    enum Failure: Error, Equatable {
         case unauthenticated
         case proRequired
         case familyGroupAlreadyExists
@@ -19,7 +19,8 @@ final class FamilyGroupStore {
         case notOwner
         case persistenceFailed
 
-        var errorDescription: String? {
+        @MainActor
+        var userMessage: String {
             switch self {
             case .unauthenticated:
                 return L10n.text(

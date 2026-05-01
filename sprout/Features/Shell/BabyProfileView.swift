@@ -7,8 +7,10 @@ struct BabyProfileView: View {
     let onShowPaywall: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(AuthManager.self) private var authManager
     @Environment(SubscriptionManager.self) private var subscriptionManager
     @State private var babies: [BabyProfile] = []
+    @State private var sharedBabies: [BabyProfile] = []
     @State private var name: String = ""
     @State private var birthDate: Date = .now
     @State private var gender: BabyProfile.Gender?
@@ -41,6 +43,7 @@ struct BabyProfileView: View {
                 babyListSection
                 avatarSection
                 formSection
+                sharedProfileHint
                 saveFeedback
             }
             .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
@@ -79,6 +82,7 @@ struct BabyProfileView: View {
 
             if avatarPath != nil {
                 Button(String(localized: "profile.avatar.remove"), role: .destructive) {
+                    guard !isActiveSelectionShared else { return }
                     guard babyRepository.updateAvatar(nil) else {
                         showSaveError()
                         return
@@ -128,6 +132,10 @@ struct BabyProfileView: View {
         }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
+            guard !isActiveSelectionShared else {
+                selectedPhotoItem = nil
+                return
+            }
             Task {
                 guard let data = try await newItem.loadTransferable(type: Data.self),
                       let image = UIImage(data: data) else { return }
@@ -143,6 +151,10 @@ struct BabyProfileView: View {
         }
         .onChange(of: capturedImage) { _, newImage in
             guard let newImage else { return }
+            guard !isActiveSelectionShared else {
+                capturedImage = nil
+                return
+            }
             guard babyRepository.updateAvatar(newImage) else {
                 showSaveError()
                 return
@@ -162,39 +174,73 @@ struct BabyProfileView: View {
     }
 
     private var babyListSection: some View {
+        VStack(spacing: AppTheme.Spacing.section) {
+            babySection(
+                title: L10n.text("shell.profile.babies.title", en: "Babies", zh: "宝宝"),
+                detail: L10n.text(
+                    "shell.profile.babies.detail",
+                    en: "Choose who this moment belongs to.",
+                    zh: "选择现在要记录的宝宝。"
+                ),
+                babies: babies,
+                isShared: false,
+                showsAddButton: true
+            )
+
+            if !sharedBabies.isEmpty {
+                babySection(
+                    title: L10n.text("shell.profile.shared_babies.title", en: "Shared Babies", zh: "共享宝宝"),
+                    detail: L10n.text(
+                        "shell.profile.shared_babies.detail",
+                        en: "Babies shared with this account stay separate from your own.",
+                        zh: "共享给这个账号的宝宝会和自己的宝宝分开显示。"
+                    ),
+                    babies: sharedBabies,
+                    isShared: true,
+                    showsAddButton: false
+                )
+            }
+        }
+    }
+
+    private func babySection(
+        title: String,
+        detail: String,
+        babies: [BabyProfile],
+        isShared: Bool,
+        showsAddButton: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(L10n.text("shell.profile.babies.title", en: "Babies", zh: "宝宝"))
+                    Text(title)
                         .font(AppTheme.Typography.cardTitle)
                         .foregroundStyle(AppTheme.Colors.primaryText)
 
-                    Text(L10n.text(
-                        "shell.profile.babies.detail",
-                        en: "Choose who this moment belongs to.",
-                        zh: "选择现在要记录的宝宝。"
-                    ))
-                    .font(AppTheme.Typography.meta)
-                    .foregroundStyle(AppTheme.Colors.tertiaryText)
+                    Text(detail)
+                        .font(AppTheme.Typography.meta)
+                        .foregroundStyle(AppTheme.Colors.tertiaryText)
                 }
 
                 Spacer()
 
-                Button(action: presentCreateBabySheet) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(AppTheme.Colors.primaryText)
-                        .frame(width: 32, height: 32)
-                        .background(AppTheme.Colors.iconBackground)
-                        .clipShape(Circle())
+                if showsAddButton {
+                    Button(action: presentCreateBabySheet) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(AppTheme.Colors.primaryText)
+                            .frame(width: 32, height: 32)
+                            .background(AppTheme.Colors.iconBackground)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L10n.text("shell.profile.add_baby", en: "Add baby", zh: "添加宝宝"))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(L10n.text("shell.profile.add_baby", en: "Add baby", zh: "添加宝宝"))
             }
 
             VStack(spacing: 0) {
                 ForEach(babies, id: \.id) { baby in
-                    babyRow(for: baby)
+                    babyRow(for: baby, isShared: isShared)
 
                     if baby.id != babies.last?.id {
                         Divider()
@@ -210,8 +256,9 @@ struct BabyProfileView: View {
         .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
     }
 
-    private func babyRow(for baby: BabyProfile) -> some View {
-        HStack(spacing: 12) {
+    private func babyRow(for baby: BabyProfile, isShared: Bool) -> some View {
+        let isCurrent = isCurrentBaby(baby)
+        return HStack(spacing: 12) {
             Button(action: { activateBaby(baby) }) {
                 HStack(spacing: 12) {
                     BabyAvatarView(
@@ -236,10 +283,10 @@ struct BabyProfileView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(baby.isActive)
+            .disabled(isCurrent)
 
-            if baby.isActive {
-                Text(L10n.text("shell.profile.active_baby", en: "Current", zh: "当前"))
+            if isCurrent || isShared {
+                Text(rowBadgeTitle(isCurrent: isCurrent, isShared: isShared))
                     .font(AppTheme.Typography.floatingLabel)
                     .foregroundStyle(AppTheme.Colors.accent)
                     .padding(.horizontal, 10)
@@ -248,7 +295,7 @@ struct BabyProfileView: View {
                     .clipShape(Capsule())
             }
 
-            if babies.count > 1 {
+            if !isShared && babies.count > 1 {
                 Button(action: { presentDeleteAlert(for: baby) }) {
                     Image(systemName: "trash")
                         .font(.system(size: 13, weight: .medium))
@@ -357,6 +404,7 @@ struct BabyProfileView: View {
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
+        .disabled(isActiveSelectionShared)
     }
 
     private var formSection: some View {
@@ -371,6 +419,25 @@ struct BabyProfileView: View {
         .background(AppTheme.Colors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
         .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+        .disabled(isActiveSelectionShared)
+    }
+
+    @ViewBuilder
+    private var sharedProfileHint: some View {
+        if isActiveSelectionShared {
+            Text(L10n.text(
+                "shell.profile.shared_baby.readonly",
+                en: "This baby is shared with you. Profile details are managed by the owner.",
+                zh: "这个宝宝是共享给你的。资料由创建者管理。"
+            ))
+            .font(AppTheme.Typography.meta)
+            .foregroundStyle(AppTheme.Colors.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(AppTheme.Colors.cardBackground.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
     }
 
     private var nameField: some View {
@@ -383,6 +450,7 @@ struct BabyProfileView: View {
                 .font(AppTheme.Typography.sheetBody)
                 .foregroundStyle(AppTheme.Colors.primaryText)
                 .onChange(of: name) {
+                    guard !isActiveSelectionShared else { return }
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return }
                     guard babyRepository.updateName(trimmed) else {
@@ -410,6 +478,7 @@ struct BabyProfileView: View {
             .font(AppTheme.Typography.sheetBody)
             .foregroundStyle(AppTheme.Colors.primaryText)
             .onChange(of: birthDate) {
+                guard !isActiveSelectionShared else { return }
                 guard babyRepository.updateBirthDate(birthDate) else {
                     showSaveError()
                     return
@@ -463,6 +532,7 @@ struct BabyProfileView: View {
     }
 
     private func toggleGender(_ target: BabyProfile.Gender) {
+        guard !isActiveSelectionShared else { return }
         if gender == target {
             guard babyRepository.updateGender(nil) else {
                 showSaveError()
@@ -482,8 +552,8 @@ struct BabyProfileView: View {
 
     private func presentCreateBabySheet() {
         do {
-            let existingBabyCount = try babyRepository.fetchBabies().count
-            guard subscriptionManager.canCreateAdditionalBaby(existingBabyCount: existingBabyCount) else {
+            let accessibleBabies = try babyRepository.fetchAccessibleBabies(for: currentUserID)
+            guard subscriptionManager.canCreateAdditionalBaby(existingBabyCount: accessibleBabies.owned.count) else {
                 showPaywallOrError()
                 return
             }
@@ -503,7 +573,8 @@ struct BabyProfileView: View {
         let result = babyRepository.createBabyResult(
             name: newBabyName,
             birthDate: newBabyBirthDate,
-            gender: newBabyGender
+            gender: newBabyGender,
+            currentUserID: currentUserID
         )
 
         switch result {
@@ -535,9 +606,9 @@ struct BabyProfileView: View {
     }
 
     private func activateBaby(_ baby: BabyProfile) {
-        guard !baby.isActive else { return }
+        guard !isCurrentBaby(baby) else { return }
         AppHaptics.selection()
-        guard babyRepository.activateBaby(id: baby.id) else {
+        guard babyRepository.activateAccessibleBaby(id: baby.id, currentUserID: currentUserID) else {
             showSaveError()
             return
         }
@@ -604,7 +675,9 @@ struct BabyProfileView: View {
     @discardableResult
     private func refreshFromRepository(showErrorOnFailure: Bool = true) -> Bool {
         do {
-            babies = try babyRepository.fetchBabies()
+            let groups = try babyRepository.fetchAccessibleBabies(for: currentUserID)
+            babies = groups.owned
+            sharedBabies = groups.shared
             loadFromRepository()
             return true
         } catch {
@@ -630,12 +703,44 @@ struct BabyProfileView: View {
     }
 
     private func refreshBabyListSilently() {
-        babies = (try? babyRepository.fetchBabies()) ?? babies
+        guard let groups = try? babyRepository.fetchAccessibleBabies(for: currentUserID) else { return }
+        babies = groups.owned
+        sharedBabies = groups.shared
     }
 
     private func monogram(for babyName: String) -> String {
         let trimmed = babyName.trimmingCharacters(in: .whitespacesAndNewlines)
         return String(trimmed.first ?? Character("B"))
+    }
+
+    private var currentUserID: UUID? {
+        if let currentUserID = authManager.currentUserID {
+            return currentUserID
+        }
+        guard case .authenticated(let userID) = authManager.authState else {
+            return nil
+        }
+        return userID
+    }
+
+    private var isActiveSelectionShared: Bool {
+        guard let access = babyRepository.activeBabyAccess else { return false }
+        guard case .shared = access.ownership else { return false }
+        return true
+    }
+
+    private func isCurrentBaby(_ baby: BabyProfile) -> Bool {
+        babyRepository.activeBaby?.id == baby.id
+    }
+
+    private func rowBadgeTitle(isCurrent: Bool, isShared: Bool) -> String {
+        if isCurrent {
+            return L10n.text("shell.profile.active_baby", en: "Current", zh: "当前")
+        }
+        if isShared {
+            return L10n.text("shell.profile.shared_baby.badge", en: "Shared", zh: "共享")
+        }
+        return ""
     }
 }
 

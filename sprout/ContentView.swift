@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var growthStore: GrowthStore? = nil
     @State private var treasureStore: TreasureStore? = nil
     @State private var babyRepository: BabyRepository? = nil
+    @State private var familyGroupStore: FamilyGroupStore? = nil
     @State private var authManager: AuthManager? = nil
     @State private var syncEngine: SyncEngine? = nil
     @State private var cloudSyncStatusStore = CloudSyncStatusStore()
@@ -22,13 +23,14 @@ struct ContentView: View {
             AppTheme.Colors.background
                 .ignoresSafeArea()
 
-            if let store, let growthStore, let treasureStore, let babyRepository, let authManager {
+            if let store, let growthStore, let treasureStore, let babyRepository, let familyGroupStore, let authManager {
                 AppShellView(
                     babyRepository: babyRepository,
                     store: store,
                     growthStore: growthStore,
                     treasureStore: treasureStore,
                     activeBabyState: activeBabyState,
+                    familyGroupStore: familyGroupStore,
                     initialTab: launchOverrides.initialModule ?? .record
                 )
                     .environment(authManager)
@@ -118,12 +120,18 @@ struct ContentView: View {
             }
 
             let headerConfig = HomeHeaderConfig.from(repo.activeBaby)
-            activeBabyState.headerConfig = headerConfig
+            activeBabyState.updateFrom(repo.activeBaby)
             launchOverrides.applyIfNeeded(modelContext: modelContext, headerConfig: headerConfig)
+            guard let manager = authManager else { return }
 
             let homeStore = HomeStore(headerConfig: headerConfig)
             let growth = GrowthStore(headerConfig: headerConfig)
             let treasure = TreasureStore(headerConfig: headerConfig)
+            let familyStore = FamilyGroupStore(
+                authManager: manager,
+                subscriptionManager: subscriptionManager,
+                repository: FamilyGroupRepository(modelContext: modelContext)
+            )
 
             homeStore.configure(modelContext: modelContext)
             homeStore.configure(aiService: MockFoodAIAssistService())
@@ -153,6 +161,7 @@ struct ContentView: View {
             growthStore = growth
             treasureStore = treasure
             babyRepository = repo
+            familyGroupStore = familyStore
         }
     }
 }
