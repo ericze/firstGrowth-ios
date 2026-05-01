@@ -25,6 +25,8 @@ final class HomeStore {
     @ObservationIgnored private let foodTagCatalog: FoodTagCatalog
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private let dateProvider: () -> Date
+    @ObservationIgnored private let currentUserIDProvider: () -> UUID?
+    @ObservationIgnored private let accessProvider: (UUID) throws -> FamilyBabyAccess?
     @ObservationIgnored private let historyPageSize: Int
     @ObservationIgnored private var foodEditorSession = FoodEditorSession.create(at: Date())
     @ObservationIgnored private var loadedHistoryCount = 0
@@ -40,7 +42,9 @@ final class HomeStore {
         sleepSessionRepository: SleepSessionRepository = SleepSessionRepository(),
         calendar: Calendar = .current,
         historyPageSize: Int = 20,
-        dateProvider: @escaping () -> Date = Date.init
+        dateProvider: @escaping () -> Date = Date.init,
+        currentUserIDProvider: @escaping () -> UUID? = { nil },
+        accessProvider: @escaping (UUID) throws -> FamilyBabyAccess? = { _ in nil }
     ) {
         let resolvedLocalizationService = localizationService ?? .current
         self.headerConfig = headerConfig
@@ -57,6 +61,8 @@ final class HomeStore {
         self.calendar = calendar
         self.historyPageSize = historyPageSize
         self.dateProvider = dateProvider
+        self.currentUserIDProvider = currentUserIDProvider
+        self.accessProvider = accessProvider
 
         let initialDraftDate = dateProvider()
         self.foodDraftTimestamp = initialDraftDate
@@ -202,7 +208,12 @@ extension HomeStore {
 
     func configure(modelContext: ModelContext) {
         guard recordRepository == nil else { return }
-        recordRepository = RecordRepository(modelContext: modelContext, calendar: calendar)
+        recordRepository = RecordRepository(
+            modelContext: modelContext,
+            calendar: calendar,
+            currentUserIDProvider: currentUserIDProvider,
+            accessProvider: accessProvider
+        )
     }
 
     func configure(aiService: FoodAIAssistService) {
@@ -1041,6 +1052,7 @@ extension HomeStore {
         guard routeState.activeSheet == nil else { return false }
         guard routeState.recordDeleteState.summary == nil else { return false }
         guard case .timelineIdle = viewState.recordInteractionFocusState else { return false }
+        guard canEditTimelineRecord(recordID) else { return false }
         return timelineItems.contains { $0.recordID == recordID }
     }
 
@@ -1082,7 +1094,8 @@ extension HomeStore {
             guard
                 let record = try recordRepository.fetchRecord(id: id),
                 let recordType = record.recordType,
-                RecordEditorType(recordType: recordType) != nil
+                RecordEditorType(recordType: recordType) != nil,
+                try recordRepository.canEditRecord(id: id)
             else {
                 return nil
             }
@@ -1095,6 +1108,21 @@ extension HomeStore {
                 userMessage: missingRecordMessage()
             )
             return nil
+        }
+    }
+
+    private func canEditTimelineRecord(_ recordID: UUID) -> Bool {
+        guard let recordRepository else { return false }
+
+        do {
+            return try recordRepository.canEditRecord(id: recordID)
+        } catch {
+            handlePersistenceError(
+                error,
+                logMessage: "Check record edit permission failed",
+                userMessage: missingRecordMessage()
+            )
+            return false
         }
     }
 

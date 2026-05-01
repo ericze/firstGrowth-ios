@@ -5,6 +5,7 @@ enum SupabaseTable: String, CaseIterable, Sendable {
     case babyProfiles = "baby_profiles"
     case recordItems = "record_items"
     case memoryEntries = "memory_entries"
+    case familyGroups = "family_groups"
 }
 
 enum StorageBucket: String, CaseIterable, Sendable {
@@ -114,6 +115,34 @@ struct MemoryEntryDTO: nonisolated Codable, Equatable, Sendable {
         case imageStoragePaths = "image_storage_paths"
         case note
         case isMilestone = "is_milestone"
+        case updatedAt = "updated_at"
+        case version
+        case deletedAt = "deleted_at"
+    }
+}
+
+struct FamilyGroupDTO: nonisolated Codable, Equatable, Sendable {
+    let id: UUID
+    let ownerUserID: UUID
+    let inviteCode: String?
+    let inviteExpiresAt: Date?
+    let inviteState: String
+    let sharedBabyIDs: [UUID]
+    let members: [FamilyMemberSnapshot]
+    let createdAt: Date
+    let updatedAt: Date
+    let version: Int64
+    let deletedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case ownerUserID = "owner_user_id"
+        case inviteCode = "invite_code"
+        case inviteExpiresAt = "invite_expires_at"
+        case inviteState = "invite_state"
+        case sharedBabyIDs = "shared_baby_ids"
+        case members
+        case createdAt = "created_at"
         case updatedAt = "updated_at"
         case version
         case deletedAt = "deleted_at"

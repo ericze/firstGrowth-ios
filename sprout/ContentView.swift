@@ -176,6 +176,8 @@ private struct BootstrapFallbackSupabaseService: SupabaseServicing {
     func upsertBabyProfile(_ profile: BabyProfileDTO, expectedVersion: Int64?) async throws -> BabyProfileDTO { profile }
     func upsertRecordItem(_ record: RecordItemDTO, expectedVersion: Int64?) async throws -> RecordItemDTO { record }
     func upsertMemoryEntry(_ entry: MemoryEntryDTO, expectedVersion: Int64?) async throws -> MemoryEntryDTO { entry }
+    func upsertFamilyGroup(_ group: FamilyGroupDTO, expectedVersion: Int64?) async throws -> FamilyGroupDTO { group }
+    func fetchFamilyGroups(updatedAfter: Date?, upTo upperBound: Date) async throws -> [FamilyGroupDTO] { [] }
     func fetchBabyProfiles(updatedAfter: Date?, upTo upperBound: Date) async throws -> [BabyProfileDTO] { [] }
     func fetchRecordItems(updatedAfter: Date?, upTo upperBound: Date) async throws -> [RecordItemDTO] { [] }
     func fetchMemoryEntries(updatedAfter: Date?, upTo upperBound: Date) async throws -> [MemoryEntryDTO] { [] }

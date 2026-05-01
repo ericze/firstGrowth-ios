@@ -122,6 +122,12 @@ final class SyncEngine {
             try persistModelChangesIfNeeded()
         }
 
+        let familyGroups = try fetchPendingFamilyGroups()
+        for familyGroup in familyGroups {
+            try await pushFamilyGroup(familyGroup)
+            try persistModelChangesIfNeeded()
+        }
+
         let records = try fetchPendingRecordItems()
         for record in records {
             try await pushRecordItem(record, userID: userID, assetSyncService: assetSyncService)
@@ -155,6 +161,10 @@ final class SyncEngine {
         var cursor = cursorStore.load(for: userID)
 
         // Step 3: Fetch per-table in fixed order.
+        let remoteFamilyGroups = try await supabaseService.fetchFamilyGroups(
+            updatedAfter: cursor.familyGroupsAt,
+            upTo: upperBound
+        )
         let remoteBabies = try await supabaseService.fetchBabyProfiles(
             updatedAfter: cursor.babyProfilesAt,
             upTo: upperBound
@@ -169,6 +179,9 @@ final class SyncEngine {
         )
 
         // Step 4: Apply all rows (synchronous metadata write).
+        for remote in remoteFamilyGroups {
+            try apply(remote)
+        }
         var appliedBabies: [BabyProfile] = []
         for remote in remoteBabies {
             if let applied = try apply(remote) {
@@ -192,7 +205,7 @@ final class SyncEngine {
             if let applied {
                 appliedMemories.append(applied)
             }
-            if wasInsertedOrDeleted, let callback = onMemoryPulled {
+            if wasInsertedOrDeleted {
                 let weekStart = pullCalendar.date(
                     from: pullCalendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: remote.createdAt)
                 ) ?? pullCalendar.startOfDay(for: remote.createdAt)
@@ -239,10 +252,51 @@ final class SyncEngine {
         }
 
         // Step 5: Save cursor only after all applies succeed.
+        cursor.familyGroupsAt = upperBound
         cursor.babyProfilesAt = upperBound
         cursor.recordItemsAt = upperBound
         cursor.memoryEntriesAt = upperBound
         cursorStore.save(cursor, for: userID)
+    }
+
+    private func apply(_ remote: FamilyGroupDTO) throws {
+        let existing = try fetchLocalFamilyGroup(id: remote.id)
+
+        if let existing {
+            guard existing.syncState != .pendingUpsert else { return }
+
+            if remote.deletedAt != nil {
+                modelContext.delete(existing)
+                return
+            }
+
+            existing.ownerUserID = remote.ownerUserID
+            existing.inviteCode = remote.inviteCode
+            existing.inviteExpiresAt = remote.inviteExpiresAt
+            existing.inviteStateRaw = remote.inviteState
+            existing.sharedBabyIDs = remote.sharedBabyIDs
+            existing.memberPayloads = remote.members
+            existing.remoteVersion = remote.version
+            existing.syncState = .synced
+            existing.updatedAt = remote.updatedAt
+        } else {
+            guard remote.deletedAt == nil else { return }
+
+            let familyGroup = FamilyGroup(
+                id: remote.id,
+                ownerUserID: remote.ownerUserID,
+                inviteCode: remote.inviteCode,
+                inviteExpiresAt: remote.inviteExpiresAt,
+                inviteState: FamilyInviteState(rawValue: remote.inviteState) ?? .revoked,
+                sharedBabyIDs: remote.sharedBabyIDs,
+                memberPayloads: remote.members,
+                remoteVersion: remote.version,
+                syncStateRaw: SyncState.synced.rawValue,
+                createdAt: remote.createdAt,
+                updatedAt: remote.updatedAt
+            )
+            modelContext.insert(familyGroup)
+        }
     }
 
     /// Returns the applied `BabyProfile` (or `nil` if skipped/deleted).
@@ -395,6 +449,12 @@ final class SyncEngine {
         return try modelContext.fetch(descriptor).first
     }
 
+    private func fetchLocalFamilyGroup(id: UUID) throws -> FamilyGroup? {
+        var descriptor = FetchDescriptor<FamilyGroup>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
     private func fetchLocalRecord(id: UUID) throws -> RecordItem? {
         var descriptor = FetchDescriptor<RecordItem>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
@@ -418,6 +478,14 @@ final class SyncEngine {
         baby.remoteVersion = saved.version
         baby.remoteAvatarPath = saved.avatarStoragePath
         baby.syncState = .synced
+    }
+
+    private func pushFamilyGroup(_ familyGroup: FamilyGroup) async throws {
+        let dto = makeFamilyGroupDTO(familyGroup: familyGroup)
+        let saved = try await upsertFamilyGroup(dto, localModel: familyGroup)
+        familyGroup.remoteVersion = saved.version
+        familyGroup.syncState = .synced
+        familyGroup.updatedAt = saved.updatedAt
     }
 
     private func pushRecordItem(
@@ -499,6 +567,23 @@ final class SyncEngine {
         }
     }
 
+    private func upsertFamilyGroup(
+        _ dto: FamilyGroupDTO,
+        localModel: FamilyGroup
+    ) async throws -> FamilyGroupDTO {
+        do {
+            return try await supabaseService.upsertFamilyGroup(dto, expectedVersion: localModel.remoteVersion)
+        } catch let error as SyncEngineError {
+            guard case .versionConflict = error else { throw error }
+            guard let remote = try await fetchRemoteFamilyGroup(id: localModel.id) else {
+                throw SyncEngineError.conflictResolutionFailed(table: .familyGroups, id: localModel.id)
+            }
+            localModel.remoteVersion = remote.version
+            let refreshedDTO = makeFamilyGroupDTO(familyGroup: localModel)
+            return try await supabaseService.upsertFamilyGroup(refreshedDTO, expectedVersion: remote.version)
+        }
+    }
+
     private func upsertRecordItem(
         _ dto: RecordItemDTO,
         localModel: RecordItem
@@ -561,9 +646,17 @@ final class SyncEngine {
             return try await fetchRemoteRecordItem(id: id)?.version
         case .memoryEntries:
             return try await fetchRemoteMemoryEntry(id: id)?.version
+        case .familyGroups:
+            return try await fetchRemoteFamilyGroup(id: id)?.version
         case .profiles:
             return nil
         }
+    }
+
+    private func fetchRemoteFamilyGroup(id: UUID) async throws -> FamilyGroupDTO? {
+        let upperBound = try await supabaseService.fetchServerNow()
+        let rows = try await supabaseService.fetchFamilyGroups(updatedAfter: nil, upTo: upperBound)
+        return rows.first(where: { $0.id == id })
     }
 
     private func fetchRemoteBabyProfile(id: UUID) async throws -> BabyProfileDTO? {
@@ -586,9 +679,10 @@ final class SyncEngine {
 
     private func refreshPendingCounts() {
         let pendingBabies = (try? fetchPendingBabies().count) ?? 0
+        let pendingFamilyGroups = (try? fetchPendingFamilyGroups().count) ?? 0
         let pendingRecords = (try? fetchPendingRecordItems().count) ?? 0
         let pendingMemories = (try? fetchPendingMemoryEntries().count) ?? 0
-        syncUIState.pendingUpsertCount = pendingBabies + pendingRecords + pendingMemories
+        syncUIState.pendingUpsertCount = pendingBabies + pendingFamilyGroups + pendingRecords + pendingMemories
         syncUIState.pendingDeletionCount = (try? fetchDeletionTombstones().count) ?? 0
     }
 
@@ -605,6 +699,19 @@ final class SyncEngine {
         return try modelContext.fetch(descriptor).sorted {
             if $0.createdAt != $1.createdAt {
                 return $0.createdAt < $1.createdAt
+            }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    private func fetchPendingFamilyGroups() throws -> [FamilyGroup] {
+        let pendingUpsertRawValue = SyncState.pendingUpsert.rawValue
+        let descriptor = FetchDescriptor<FamilyGroup>(
+            predicate: #Predicate<FamilyGroup> { $0.syncStateRaw == pendingUpsertRawValue }
+        )
+        return try modelContext.fetch(descriptor).sorted {
+            if $0.updatedAt != $1.updatedAt {
+                return $0.updatedAt < $1.updatedAt
             }
             return $0.id.uuidString < $1.id.uuidString
         }
@@ -687,6 +794,22 @@ final class SyncEngine {
             createdAt: baby.createdAt,
             updatedAt: nowProvider(),
             version: baby.remoteVersion ?? 0,
+            deletedAt: nil
+        )
+    }
+
+    private func makeFamilyGroupDTO(familyGroup: FamilyGroup) -> FamilyGroupDTO {
+        FamilyGroupDTO(
+            id: familyGroup.id,
+            ownerUserID: familyGroup.ownerUserID,
+            inviteCode: familyGroup.inviteCode?.trimmed.nilIfEmpty,
+            inviteExpiresAt: familyGroup.inviteExpiresAt,
+            inviteState: familyGroup.inviteStateRaw,
+            sharedBabyIDs: familyGroup.sharedBabyIDs,
+            members: familyGroup.memberPayloads,
+            createdAt: familyGroup.createdAt,
+            updatedAt: nowProvider(),
+            version: familyGroup.remoteVersion ?? 0,
             deletedAt: nil
         )
     }

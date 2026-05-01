@@ -3,11 +3,23 @@ import SwiftData
 
 nonisolated final class GrowthMilestoneRepository {
     private let modelContext: ModelContext
+    private let currentUserIDProvider: () -> UUID?
+    private let accessProvider: (UUID) throws -> FamilyBabyAccess?
 
     @MainActor
-    init(modelContext: ModelContext) {
+    init(
+        modelContext: ModelContext,
+        currentUserIDProvider: @escaping () -> UUID? = { nil },
+        accessProvider: @escaping (UUID) throws -> FamilyBabyAccess? = { _ in nil }
+    ) {
         self.modelContext = modelContext
+        self.currentUserIDProvider = currentUserIDProvider
+        self.accessProvider = accessProvider
     }
+}
+
+enum GrowthMilestoneRepositoryError: Error, Equatable {
+    case permissionDenied(UUID)
 }
 
 @MainActor
@@ -30,6 +42,8 @@ extension GrowthMilestoneRepository {
             occurredAt: occurredAt,
             note: note,
             imageLocalPath: imageLocalPath,
+            createdByUserID: currentUserIDProvider(),
+            updatedByUserID: currentUserIDProvider(),
             isCustom: isCustom
         )
         modelContext.insert(entry)
@@ -63,10 +77,14 @@ extension GrowthMilestoneRepository {
         note: String? = nil,
         occurredAt: Date? = nil
     ) throws {
+        try enforceCanEdit(entry)
         if let title { entry.title = title }
         if let note { entry.note = note }
         if let occurredAt { entry.occurredAt = occurredAt }
         entry.syncStateRaw = SyncState.pendingUpsert.rawValue
+        if let currentUserID = currentUserIDProvider() {
+            entry.updatedByUserID = currentUserID
+        }
         entry.updatedAt = Date()
         try modelContext.save()
     }
@@ -80,7 +98,19 @@ extension GrowthMilestoneRepository {
         descriptor.fetchLimit = 1
 
         guard let entry = try modelContext.fetch(descriptor).first else { return }
+        try enforceCanEdit(entry)
         modelContext.delete(entry)
         try modelContext.save()
+    }
+
+    private func enforceCanEdit(_ entry: GrowthMilestoneEntry) throws {
+        let access = try accessProvider(entry.babyID) ?? FamilyBabyAccess(babyID: entry.babyID, ownership: .owned)
+        guard FamilyPermission.canEdit(
+            authoredBy: entry.createdByUserID,
+            currentUserID: currentUserIDProvider(),
+            access: access
+        ) else {
+            throw GrowthMilestoneRepositoryError.permissionDenied(entry.id)
+        }
     }
 }

@@ -31,6 +31,8 @@ protocol SupabaseServicing: Sendable {
     func upsertBabyProfile(_ profile: BabyProfileDTO, expectedVersion: Int64?) async throws -> BabyProfileDTO
     func upsertRecordItem(_ record: RecordItemDTO, expectedVersion: Int64?) async throws -> RecordItemDTO
     func upsertMemoryEntry(_ entry: MemoryEntryDTO, expectedVersion: Int64?) async throws -> MemoryEntryDTO
+    func upsertFamilyGroup(_ group: FamilyGroupDTO, expectedVersion: Int64?) async throws -> FamilyGroupDTO
+    func fetchFamilyGroups(updatedAfter: Date?, upTo upperBound: Date) async throws -> [FamilyGroupDTO]
     func fetchBabyProfiles(updatedAfter: Date?, upTo upperBound: Date) async throws -> [BabyProfileDTO]
     func fetchRecordItems(updatedAfter: Date?, upTo upperBound: Date) async throws -> [RecordItemDTO]
     func fetchMemoryEntries(updatedAfter: Date?, upTo upperBound: Date) async throws -> [MemoryEntryDTO]
@@ -144,6 +146,24 @@ actor SupabaseService: SupabaseServicing {
             rowID: entry.id,
             payload: entry,
             expectedVersion: expectedVersion
+        )
+    }
+
+    func upsertFamilyGroup(_ group: FamilyGroupDTO, expectedVersion: Int64?) async throws -> FamilyGroupDTO {
+        try await upsert(
+            function: "upsert_family_group",
+            table: .familyGroups,
+            rowID: group.id,
+            payload: group,
+            expectedVersion: expectedVersion
+        )
+    }
+
+    func fetchFamilyGroups(updatedAfter: Date?, upTo upperBound: Date) async throws -> [FamilyGroupDTO] {
+        try await fetchRows(
+            table: SupabaseTable.familyGroups.rawValue,
+            updatedAfter: updatedAfter,
+            upperBound: upperBound
         )
     }
 

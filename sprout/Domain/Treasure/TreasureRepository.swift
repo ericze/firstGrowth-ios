@@ -7,16 +7,26 @@ nonisolated final class TreasureRepository {
     private let modelContext: ModelContext
     private let calendar: Calendar
     private let digestBuilder: WeeklyDigestBuilder
+    private let currentUserIDProvider: () -> UUID?
+    private let accessProvider: (UUID) throws -> FamilyBabyAccess?
 
     @MainActor
     init(
         modelContext: ModelContext,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        currentUserIDProvider: @escaping () -> UUID? = { nil },
+        accessProvider: @escaping (UUID) throws -> FamilyBabyAccess? = { _ in nil }
     ) {
         self.modelContext = modelContext
         self.calendar = calendar
         self.digestBuilder = WeeklyDigestBuilder(calendar: calendar)
+        self.currentUserIDProvider = currentUserIDProvider
+        self.accessProvider = accessProvider
     }
+}
+
+enum TreasureRepositoryError: Error, Equatable {
+    case permissionDenied(UUID)
 }
 
 @MainActor
@@ -41,12 +51,15 @@ extension TreasureRepository {
             0
         )
         let babyID = try fetchPreferredBabyID() ?? UUID()
+        let currentUserID = currentUserIDProvider()
 
         let entry = MemoryEntry(
             babyID: babyID,
             createdAt: createdAt,
             ageInDays: ageInDays,
             imageLocalPaths: Array(normalizedImagePaths),
+            createdByUserID: currentUserID,
+            updatedByUserID: currentUserID,
             note: normalizedNote,
             isMilestone: isMilestone
         )
@@ -98,6 +111,7 @@ extension TreasureRepository {
         descriptor.fetchLimit = 1
 
         guard let entry = try modelContext.fetch(descriptor).first else { return }
+        try enforceCanEdit(entry)
         let imagePaths = removeImage ? resolvedImageLocalPaths(for: entry) : []
         let tombstone = SyncDeletionTombstone(
             entityType: .memoryEntry,
@@ -277,6 +291,17 @@ extension TreasureRepository {
 
     private func resolvedImageLocalPaths(for entry: MemoryEntry) -> [String] {
         entry.imageLocalPaths
+    }
+
+    private func enforceCanEdit(_ entry: MemoryEntry) throws {
+        let access = try accessProvider(entry.babyID) ?? FamilyBabyAccess(babyID: entry.babyID, ownership: .owned)
+        guard FamilyPermission.canEdit(
+            authoredBy: entry.createdByUserID,
+            currentUserID: currentUserIDProvider(),
+            access: access
+        ) else {
+            throw TreasureRepositoryError.permissionDenied(entry.id)
+        }
     }
 }
 

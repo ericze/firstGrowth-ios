@@ -16,7 +16,13 @@ final class FamilyGroupStore {
         case proRequired
         case familyGroupAlreadyExists
         case familyGroupNotFound
+        case invalidInviteCode
+        case inviteExpired
+        case inviteRevoked
         case notOwner
+        case babyNotFound
+        case memberNotFound
+        case cannotRemoveOwner
         case persistenceFailed
 
         @MainActor
@@ -46,11 +52,47 @@ final class FamilyGroupStore {
                     en: "No family group was found.",
                     zh: "没有找到家庭组。"
                 )
+            case .invalidInviteCode:
+                return L10n.text(
+                    "family_group.error.invalid_invite_code",
+                    en: "That invite code is not active.",
+                    zh: "该邀请码当前不可用。"
+                )
+            case .inviteExpired:
+                return L10n.text(
+                    "family_group.error.invite_expired",
+                    en: "That invite code has expired.",
+                    zh: "该邀请码已过期。"
+                )
+            case .inviteRevoked:
+                return L10n.text(
+                    "family_group.error.invite_revoked",
+                    en: "That invite code has been revoked.",
+                    zh: "该邀请码已被撤销。"
+                )
             case .notOwner:
                 return L10n.text(
                     "family_group.error.not_owner",
-                    en: "Only the owner can change the invite code.",
-                    zh: "只有创建者可以修改邀请码。"
+                    en: "Only the owner can manage this family group.",
+                    zh: "只有创建者可以管理这个家庭组。"
+                )
+            case .babyNotFound:
+                return L10n.text(
+                    "family_group.error.baby_not_found",
+                    en: "That baby could not be found.",
+                    zh: "没有找到对应的宝宝。"
+                )
+            case .memberNotFound:
+                return L10n.text(
+                    "family_group.error.member_not_found",
+                    en: "That member could not be found.",
+                    zh: "没有找到对应的成员。"
+                )
+            case .cannotRemoveOwner:
+                return L10n.text(
+                    "family_group.error.cannot_remove_owner",
+                    en: "The owner cannot be removed.",
+                    zh: "不能移除创建者。"
                 )
             case .persistenceFailed:
                 return L10n.text(
@@ -135,7 +177,7 @@ final class FamilyGroupStore {
                 resetStateForFailure(.familyGroupAlreadyExists)
             case .persistenceFailed:
                 resetStateForFailure(.persistenceFailed)
-            case .familyGroupNotFound, .notOwner:
+            case .familyGroupNotFound, .notOwner, .invalidInviteCode, .inviteExpired, .inviteRevoked, .babyNotFound, .memberNotFound, .cannotRemoveOwner:
                 resetStateForFailure(.persistenceFailed)
             }
             return false
@@ -169,12 +211,126 @@ final class FamilyGroupStore {
                 resetStateForFailure(.familyGroupNotFound)
             case .notOwner:
                 resetStateForFailure(.notOwner)
-            case .familyGroupAlreadyExists, .persistenceFailed:
+            case .familyGroupAlreadyExists, .invalidInviteCode, .inviteExpired, .inviteRevoked, .babyNotFound, .memberNotFound, .cannotRemoveOwner, .persistenceFailed:
                 resetStateForFailure(.persistenceFailed)
             }
             return false
         } catch {
             recordFailure(operation: "Rotate family invite code", error: error)
+            resetStateForFailure(.persistenceFailed)
+            return false
+        }
+    }
+
+    @discardableResult
+    func joinFamilyGroup(inviteCode: String) -> Bool {
+        guard let currentUserID = currentAuthenticatedUserID else {
+            resetStateForFailure(.unauthenticated)
+            return false
+        }
+        guard subscriptionManager.allows(.familyGroup) else {
+            resetStateForFailure(.proRequired)
+            return false
+        }
+
+        do {
+            let familyGroup = try repository.joinFamilyGroup(withInviteCode: inviteCode, for: currentUserID)
+            currentFamilyGroup = familyGroup
+            ownershipState = .member
+            error = nil
+            return true
+        } catch let failure as FamilyGroupRepository.Failure {
+            switch failure {
+            case .familyGroupAlreadyExists:
+                resetStateForFailure(.familyGroupAlreadyExists)
+            case .invalidInviteCode:
+                resetStateForFailure(.invalidInviteCode)
+            case .inviteExpired:
+                resetStateForFailure(.inviteExpired)
+            case .inviteRevoked:
+                resetStateForFailure(.inviteRevoked)
+            case .familyGroupNotFound:
+                resetStateForFailure(.familyGroupNotFound)
+            case .notOwner, .babyNotFound, .memberNotFound, .cannotRemoveOwner, .persistenceFailed:
+                resetStateForFailure(.persistenceFailed)
+            }
+            return false
+        } catch {
+            recordFailure(operation: "Join family group", error: error)
+            resetStateForFailure(.persistenceFailed)
+            return false
+        }
+    }
+
+    @discardableResult
+    func setBabyShared(babyID: UUID, shared: Bool) -> Bool {
+        guard let currentUserID = currentAuthenticatedUserID else {
+            resetStateForFailure(.unauthenticated)
+            return false
+        }
+        guard subscriptionManager.allows(.familyGroup) else {
+            resetStateForFailure(.proRequired)
+            return false
+        }
+
+        do {
+            let familyGroup = try repository.setBabyShared(babyID, shared: shared, for: currentUserID)
+            currentFamilyGroup = familyGroup
+            ownershipState = .owner
+            error = nil
+            return true
+        } catch let failure as FamilyGroupRepository.Failure {
+            switch failure {
+            case .familyGroupNotFound:
+                resetStateForFailure(.familyGroupNotFound)
+            case .notOwner:
+                resetStateForFailure(.notOwner)
+            case .babyNotFound:
+                resetStateForFailure(.babyNotFound)
+            case .familyGroupAlreadyExists, .invalidInviteCode, .inviteExpired, .inviteRevoked, .memberNotFound, .cannotRemoveOwner, .persistenceFailed:
+                resetStateForFailure(.persistenceFailed)
+            }
+            return false
+        } catch {
+            recordFailure(operation: "Update shared baby", error: error)
+            resetStateForFailure(.persistenceFailed)
+            return false
+        }
+    }
+
+    @discardableResult
+    func removeMember(userID: UUID) -> Bool {
+        guard let currentUserID = currentAuthenticatedUserID else {
+            resetStateForFailure(.unauthenticated)
+            return false
+        }
+        guard subscriptionManager.allows(.familyGroup) else {
+            resetStateForFailure(.proRequired)
+            return false
+        }
+
+        do {
+            let familyGroup = try repository.removeMember(userID: userID, for: currentUserID)
+            currentFamilyGroup = familyGroup
+            ownershipState = .owner
+            error = nil
+            return true
+        } catch let failure as FamilyGroupRepository.Failure {
+            switch failure {
+            case .familyGroupNotFound:
+                resetStateForFailure(.familyGroupNotFound)
+            case .notOwner:
+                resetStateForFailure(.notOwner)
+            case .memberNotFound:
+                resetStateForFailure(.memberNotFound)
+            case .cannotRemoveOwner:
+                resetStateForFailure(.cannotRemoveOwner)
+            case .familyGroupAlreadyExists, .invalidInviteCode, .inviteExpired, .inviteRevoked, .babyNotFound, .persistenceFailed:
+                resetStateForFailure(.persistenceFailed)
+            }
+            return false
+        } catch {
+            recordFailure(operation: "Remove family member", error: error)
             resetStateForFailure(.persistenceFailed)
             return false
         }

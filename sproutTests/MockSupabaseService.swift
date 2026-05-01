@@ -6,6 +6,7 @@ actor MockSupabaseService: SupabaseServicing {
         case upsertBabyProfile(id: UUID, expectedVersion: Int64?, avatarStoragePath: String?)
         case upsertRecordItem(id: UUID, expectedVersion: Int64?, imageStoragePath: String?)
         case upsertMemoryEntry(id: UUID, expectedVersion: Int64?, imageStoragePaths: [String])
+        case upsertFamilyGroup(id: UUID, expectedVersion: Int64?, inviteCode: String?)
         case softDelete(table: SupabaseTable, id: UUID, expectedVersion: Int64?)
         case resetPassword(email: String)
         case uploadAsset(bucket: StorageBucket, path: String, contentType: String)
@@ -17,6 +18,7 @@ actor MockSupabaseService: SupabaseServicing {
     var babyProfiles: [UUID: BabyProfileDTO]
     var recordItems: [UUID: RecordItemDTO]
     var memoryEntries: [UUID: MemoryEntryDTO]
+    var familyGroups: [UUID: FamilyGroupDTO]
     var deletedRows: [(SupabaseTable, UUID)]
     var storedAssets: [String: Data]
     var operations: [Operation]
@@ -28,6 +30,7 @@ actor MockSupabaseService: SupabaseServicing {
     private var forcedBabyUpsertError: Error?
     private var forcedRecordUpsertError: Error?
     private var forcedMemoryUpsertError: Error?
+    private var forcedFamilyGroupUpsertError: Error?
     private var forcedSoftDeleteError: Error?
     private var signOutCount: Int
 
@@ -36,13 +39,15 @@ actor MockSupabaseService: SupabaseServicing {
         serverNow: Date = .now,
         babyProfiles: [UUID: BabyProfileDTO] = [:],
         recordItems: [UUID: RecordItemDTO] = [:],
-        memoryEntries: [UUID: MemoryEntryDTO] = [:]
+        memoryEntries: [UUID: MemoryEntryDTO] = [:],
+        familyGroups: [UUID: FamilyGroupDTO] = [:]
     ) {
         self.session = session
         self.serverNow = serverNow
         self.babyProfiles = babyProfiles
         self.recordItems = recordItems
         self.memoryEntries = memoryEntries
+        self.familyGroups = familyGroups
         deletedRows = []
         storedAssets = [:]
         operations = []
@@ -76,6 +81,10 @@ actor MockSupabaseService: SupabaseServicing {
 
     func stubMemoryUpsertError(_ error: Error?) {
         forcedMemoryUpsertError = error
+    }
+
+    func stubFamilyGroupUpsertError(_ error: Error?) {
+        forcedFamilyGroupUpsertError = error
     }
 
     func stubSoftDeleteError(_ error: Error?) {
@@ -181,6 +190,24 @@ actor MockSupabaseService: SupabaseServicing {
         return try save(entry, in: &memoryEntries, expectedVersion: expectedVersion)
     }
 
+    func upsertFamilyGroup(_ group: FamilyGroupDTO, expectedVersion: Int64?) async throws -> FamilyGroupDTO {
+        if let forcedFamilyGroupUpsertError {
+            throw forcedFamilyGroupUpsertError
+        }
+        operations.append(
+            .upsertFamilyGroup(
+                id: group.id,
+                expectedVersion: expectedVersion,
+                inviteCode: group.inviteCode
+            )
+        )
+        return try save(group, in: &familyGroups, expectedVersion: expectedVersion)
+    }
+
+    func fetchFamilyGroups(updatedAfter: Date?, upTo upperBound: Date) async throws -> [FamilyGroupDTO] {
+        filteredRows(from: Array(familyGroups.values), updatedAfter: updatedAfter, upperBound: upperBound)
+    }
+
     func fetchBabyProfiles(updatedAfter: Date?, upTo upperBound: Date) async throws -> [BabyProfileDTO] {
         filteredRows(from: Array(babyProfiles.values), updatedAfter: updatedAfter, upperBound: upperBound)
     }
@@ -207,6 +234,8 @@ actor MockSupabaseService: SupabaseServicing {
             recordItems.removeValue(forKey: id)
         case .memoryEntries:
             memoryEntries.removeValue(forKey: id)
+        case .familyGroups:
+            familyGroups.removeValue(forKey: id)
         case .profiles:
             break
         }
@@ -265,6 +294,11 @@ actor MockSupabaseService: SupabaseServicing {
             }
         case .memoryEntries:
             guard let row = memoryEntries[id] else { return }
+            guard expectedVersion == row.version else {
+                throw SyncEngineError.versionConflict(table: table, id: id)
+            }
+        case .familyGroups:
+            guard let row = familyGroups[id] else { return }
             guard expectedVersion == row.version else {
                 throw SyncEngineError.versionConflict(table: table, id: id)
             }
@@ -383,6 +417,30 @@ extension MemoryEntryDTO: VersionedRow {
             imageStoragePaths: imageStoragePaths,
             note: note,
             isMilestone: isMilestone,
+            updatedAt: updatedAt,
+            version: version,
+            deletedAt: deletedAt
+        )
+    }
+}
+
+extension FamilyGroupDTO: HasUpdatedAt, HasUUID {
+    var uuid: UUID { id }
+}
+
+extension FamilyGroupDTO: VersionedRow {
+    static var table: SupabaseTable { .familyGroups }
+
+    func withVersion(_ version: Int64) -> FamilyGroupDTO {
+        FamilyGroupDTO(
+            id: id,
+            ownerUserID: ownerUserID,
+            inviteCode: inviteCode,
+            inviteExpiresAt: inviteExpiresAt,
+            inviteState: inviteState,
+            sharedBabyIDs: sharedBabyIDs,
+            members: members,
+            createdAt: createdAt,
             updatedAt: updatedAt,
             version: version,
             deletedAt: deletedAt

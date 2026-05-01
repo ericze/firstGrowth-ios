@@ -39,6 +39,122 @@ struct GrowthMilestoneRepositoryTests {
         #expect(entry.note == "Smiled at daddy")
     }
 
+    @Test("create milestone stamps current user authorship when available")
+    func testCreateMilestoneStampsCurrentUserAuthorshipWhenAvailable() throws {
+        let currentUserID = UUID()
+        let env = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let babyID = UUID()
+        let repo = GrowthMilestoneRepository(
+            modelContext: env.modelContext,
+            currentUserIDProvider: { currentUserID }
+        )
+
+        let entry = try repo.createMilestone(
+            babyID: babyID,
+            title: "First Smile",
+            category: GrowthMilestoneCategory.social.rawValue,
+            occurredAt: env.now.value
+        )
+
+        #expect(entry.createdByUserID == currentUserID)
+        #expect(entry.updatedByUserID == currentUserID)
+    }
+
+    @Test("shared milestone rejects update from non-author")
+    func testSharedMilestoneRejectsUpdateFromNonAuthor() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let authorID = UUID()
+        let babyID = UUID()
+        let env = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repo = GrowthMilestoneRepository(
+            modelContext: env.modelContext,
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let entry = GrowthMilestoneEntry(
+            babyID: babyID,
+            title: "First Smile",
+            category: GrowthMilestoneCategory.social.rawValue,
+            occurredAt: env.now.value,
+            createdByUserID: authorID,
+            updatedByUserID: authorID
+        )
+        env.modelContext.insert(entry)
+        try env.modelContext.save()
+
+        #expect(throws: GrowthMilestoneRepositoryError.permissionDenied(entry.id)) {
+            try repo.updateMilestone(entry, title: "Big Smile")
+        }
+        #expect(entry.title == "First Smile")
+        #expect(entry.updatedByUserID == authorID)
+    }
+
+    @Test("shared milestone rejects delete from non-author")
+    func testSharedMilestoneRejectsDeleteFromNonAuthor() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let authorID = UUID()
+        let babyID = UUID()
+        let env = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repo = GrowthMilestoneRepository(
+            modelContext: env.modelContext,
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let entry = GrowthMilestoneEntry(
+            babyID: babyID,
+            title: "First Tooth",
+            category: GrowthMilestoneCategory.cognitive.rawValue,
+            occurredAt: env.now.value,
+            createdByUserID: authorID,
+            updatedByUserID: authorID
+        )
+        env.modelContext.insert(entry)
+        try env.modelContext.save()
+
+        #expect(throws: GrowthMilestoneRepositoryError.permissionDenied(entry.id)) {
+            try repo.deleteMilestone(id: entry.id)
+        }
+        #expect(try repo.fetchMilestone(id: entry.id) != nil)
+    }
+
+    @Test("shared milestone allows author update and delete")
+    func testSharedMilestoneAllowsAuthorUpdateAndDelete() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let babyID = UUID()
+        let env = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repo = GrowthMilestoneRepository(
+            modelContext: env.modelContext,
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let entry = GrowthMilestoneEntry(
+            babyID: babyID,
+            title: "First Smile",
+            category: GrowthMilestoneCategory.social.rawValue,
+            occurredAt: env.now.value,
+            createdByUserID: currentUserID,
+            updatedByUserID: currentUserID
+        )
+        env.modelContext.insert(entry)
+        try env.modelContext.save()
+
+        try repo.updateMilestone(entry, title: "Big Smile")
+        #expect(entry.title == "Big Smile")
+        #expect(entry.updatedByUserID == currentUserID)
+
+        try repo.deleteMilestone(id: entry.id)
+        #expect(try repo.fetchMilestone(id: entry.id) == nil)
+    }
+
     @Test("fetch milestones returns reverse chronological order")
     func testFetchMilestonesReturnsReverseChronologicalOrder() throws {
         let env = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))

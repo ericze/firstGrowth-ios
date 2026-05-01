@@ -8,18 +8,24 @@ nonisolated final class RecordRepository {
     private let validator: RecordValidator
     private let calendar: Calendar
     private let nowProvider: () -> Date
+    private let currentUserIDProvider: () -> UUID?
+    private let accessProvider: (UUID) throws -> FamilyBabyAccess?
 
     @MainActor
     init(
         modelContext: ModelContext,
         validator: RecordValidator = RecordValidator(),
         calendar: Calendar = .current,
-        nowProvider: @escaping () -> Date = Date.init
+        nowProvider: @escaping () -> Date = Date.init,
+        currentUserIDProvider: @escaping () -> UUID? = { nil },
+        accessProvider: @escaping (UUID) throws -> FamilyBabyAccess? = { _ in nil }
     ) {
         self.modelContext = modelContext
         self.validator = validator
         self.calendar = calendar
         self.nowProvider = nowProvider
+        self.currentUserIDProvider = currentUserIDProvider
+        self.accessProvider = accessProvider
     }
 }
 
@@ -27,6 +33,7 @@ enum RecordRepositoryError: Error, Equatable {
     case recordNotFound(UUID)
     case recordTypeMismatch(expected: RecordType, actual: RecordType)
     case missingFoodPhoto(String)
+    case permissionDenied(UUID)
 }
 
 enum RecordDeletionStrategy: Equatable {
@@ -112,6 +119,7 @@ extension RecordRepository {
         try validator.validateFeeding(leftSeconds: leftSeconds, rightSeconds: rightSeconds, bottleAmountMl: bottleAmountMl)
 
         let record = try fetchRequiredRecord(id: id, expectedType: .milk)
+        try enforceCanEdit(record)
         record.timestamp = date
         record.value = bottleAmountMl > 0 ? Double(bottleAmountMl) : nil
         record.leftNursingSeconds = leftSeconds
@@ -132,6 +140,7 @@ extension RecordRepository {
         try validator.validateDiaper(subtype: subtype)
 
         let record = try fetchRequiredRecord(id: id, expectedType: .diaper)
+        try enforceCanEdit(record)
         record.timestamp = date
         record.value = nil
         record.leftNursingSeconds = 0
@@ -152,6 +161,7 @@ extension RecordRepository {
         try validator.validateSleep(startedAt: startedAt, endedAt: endedAt)
 
         let record = try fetchRequiredRecord(id: id, expectedType: .sleep)
+        try enforceCanEdit(record)
         record.timestamp = startedAt
         record.value = endedAt.timeIntervalSince(startedAt)
         record.leftNursingSeconds = 0
@@ -177,6 +187,7 @@ extension RecordRepository {
         )
 
         let record = try fetchRequiredRecord(id: id, expectedType: .food)
+        try enforceCanEdit(record)
         let previousImagePath = record.imageURL?.trimmed.nilIfEmpty
 
         record.timestamp = date
@@ -326,6 +337,11 @@ extension RecordRepository {
         return try modelContext.fetch(descriptor)
     }
 
+    func canEditRecord(id: UUID) throws -> Bool {
+        guard let record = try fetchRecord(id: id) else { return false }
+        return try canCurrentUserEdit(record)
+    }
+
     /// Deletes a record and optionally preserves enough state for a short undo window.
     @discardableResult
     func deleteRecord(
@@ -334,6 +350,7 @@ extension RecordRepository {
     ) throws -> RecordRecoverySnapshot? {
         flushExpiredPendingFoodPhotoRemovals()
         guard let record = try fetchRecord(id: id) else { return nil }
+        try enforceCanEdit(record)
         let snapshot = record.recoverySnapshot
         let imagePath = record.imageURL?.trimmed.nilIfEmpty
         removeDeletionTombstones(for: id)
@@ -425,7 +442,11 @@ extension RecordRepository {
     }
 
     private func persistChanges(for record: RecordItem) throws {
+        try enforceCanEdit(record)
         record.syncState = .pendingUpsert
+        if let currentUserID = currentUserIDProvider() {
+            record.updatedByUserID = currentUserID
+        }
         try validator.validate(record)
         try modelContext.save()
     }
@@ -463,8 +484,27 @@ extension RecordRepository {
         if let activeBabyID = resolvedActiveBabyID() {
             record.babyID = activeBabyID
         }
+        if let currentUserID = currentUserIDProvider() {
+            record.createdByUserID = currentUserID
+            record.updatedByUserID = currentUserID
+        }
         record.remoteVersion = nil
         record.syncState = .pendingUpsert
+    }
+
+    private func enforceCanEdit(_ record: RecordItem) throws {
+        guard try canCurrentUserEdit(record) else {
+            throw RecordRepositoryError.permissionDenied(record.id)
+        }
+    }
+
+    private func canCurrentUserEdit(_ record: RecordItem) throws -> Bool {
+        let access = try accessProvider(record.babyID) ?? FamilyBabyAccess(babyID: record.babyID, ownership: .owned)
+        return FamilyPermission.canEdit(
+            authoredBy: record.createdByUserID,
+            currentUserID: currentUserIDProvider(),
+            access: access
+        )
     }
 
     private func resolvedActiveBabyID() -> UUID? {

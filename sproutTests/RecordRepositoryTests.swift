@@ -22,6 +22,130 @@ final class RecordRepositoryTests: XCTestCase {
         XCTAssertNil(record.remoteVersion)
     }
 
+    func testCreateRecordStampsCurrentUserAuthorshipWhenAvailable() throws {
+        let currentUserID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = RecordRepository(
+            modelContext: environment.modelContext,
+            nowProvider: { environment.now.value },
+            currentUserIDProvider: { currentUserID }
+        )
+
+        let record = try repository.createDiaperRecord(subtype: .pee, at: environment.now.value)
+
+        XCTAssertEqual(record.createdByUserID, currentUserID)
+        XCTAssertEqual(record.updatedByUserID, currentUserID)
+    }
+
+    func testSharedRecordRejectsUpdateFromNonAuthorAndLeavesContentUntouched() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let authorID = UUID()
+        let babyID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = RecordRepository(
+            modelContext: environment.modelContext,
+            nowProvider: { environment.now.value },
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let record = RecordItem(
+            babyID: babyID,
+            timestamp: environment.now.value,
+            type: RecordType.milk.rawValue,
+            value: 90,
+            createdByUserID: authorID,
+            updatedByUserID: authorID
+        )
+        environment.modelContext.insert(record)
+        try environment.modelContext.save()
+
+        XCTAssertThrowsError(
+            try repository.updateFeeding(
+                id: record.id,
+                at: environment.now.value.addingTimeInterval(60),
+                leftSeconds: 0,
+                rightSeconds: 0,
+                bottleAmountMl: 120
+            )
+        ) { error in
+            XCTAssertEqual(error as? RecordRepositoryError, .permissionDenied(record.id))
+        }
+
+        let fetched = try XCTUnwrap(repository.fetchRecord(id: record.id))
+        XCTAssertEqual(fetched.timestamp, environment.now.value)
+        XCTAssertEqual(fetched.bottleAmountMl, 90)
+        XCTAssertEqual(fetched.updatedByUserID, authorID)
+    }
+
+    func testSharedRecordAllowsAuthorUpdateAndStampsUpdater() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let babyID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = RecordRepository(
+            modelContext: environment.modelContext,
+            nowProvider: { environment.now.value },
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let record = RecordItem(
+            babyID: babyID,
+            timestamp: environment.now.value,
+            type: RecordType.diaper.rawValue,
+            subType: DiaperSubtype.pee.rawValue,
+            createdByUserID: currentUserID,
+            updatedByUserID: currentUserID
+        )
+        environment.modelContext.insert(record)
+        try environment.modelContext.save()
+
+        let updated = try repository.updateDiaper(
+            id: record.id,
+            subtype: .both,
+            at: environment.now.value.addingTimeInterval(60)
+        )
+
+        XCTAssertEqual(updated.diaperType, .both)
+        XCTAssertEqual(updated.updatedByUserID, currentUserID)
+    }
+
+    func testSharedRecordRejectsDeleteFromNonAuthor() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let authorID = UUID()
+        let babyID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = RecordRepository(
+            modelContext: environment.modelContext,
+            nowProvider: { environment.now.value },
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let record = RecordItem(
+            babyID: babyID,
+            timestamp: environment.now.value,
+            type: RecordType.sleep.rawValue,
+            value: 1_800,
+            createdByUserID: authorID,
+            updatedByUserID: authorID
+        )
+        environment.modelContext.insert(record)
+        try environment.modelContext.save()
+
+        XCTAssertThrowsError(try repository.deleteRecord(id: record.id)) { error in
+            XCTAssertEqual(error as? RecordRepositoryError, .permissionDenied(record.id))
+        }
+
+        XCTAssertNotNil(try repository.fetchRecord(id: record.id))
+    }
+
     func testFetchTodayRecordsReturnsOnlyActiveBabyRecords() throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
         let activeBabyID = UUID()

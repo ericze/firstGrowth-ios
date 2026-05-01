@@ -89,6 +89,97 @@ struct SyncEngineTests {
         #expect(engine.syncUIState.phase == .idle)
     }
 
+    @Test("push pipeline syncs pending family group metadata")
+    func pushPipelineSyncsFamilyGroupMetadata() async throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_010_000))
+        let userID = UUID()
+        let group = FamilyGroup(
+            ownerUserID: userID,
+            inviteCode: "SPROUT42",
+            inviteExpiresAt: environment.now.value.addingTimeInterval(3_600),
+            inviteState: .active,
+            sharedBabyIDs: [UUID()],
+            memberPayloads: [
+                FamilyMemberSnapshot(userID: userID, role: .owner, joinedAt: environment.now.value, removedAt: nil)
+            ],
+            createdAt: environment.now.value,
+            updatedAt: environment.now.value
+        )
+        environment.modelContext.insert(group)
+        try environment.modelContext.save()
+
+        let mock = MockSupabaseService()
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value }
+        )
+
+        #expect(engine.syncUIState.pendingUpsertCount == 1)
+
+        await engine.performFullSync(reason: .manual)
+
+        #expect(
+            await mock.readOperations() == [
+                .upsertFamilyGroup(id: group.id, expectedVersion: nil, inviteCode: "SPROUT42")
+            ]
+        )
+        #expect(group.syncState == .synced)
+        #expect(group.remoteVersion == 1)
+        #expect(engine.syncUIState.pendingUpsertCount == 0)
+    }
+
+    @Test("pull pipeline applies remote family group metadata and advances family cursor")
+    func pullPipelineAppliesRemoteFamilyGroupMetadata() async throws {
+        let serverNow = Date(timeIntervalSince1970: 1_710_020_000)
+        let environment = try makeTestEnvironment(now: serverNow)
+        let userID = UUID()
+        let groupID = UUID()
+        let sharedBabyID = UUID()
+        let remoteGroup = FamilyGroupDTO(
+            id: groupID,
+            ownerUserID: userID,
+            inviteCode: "SPROUT99",
+            inviteExpiresAt: serverNow.addingTimeInterval(7_200),
+            inviteState: FamilyInviteState.active.rawValue,
+            sharedBabyIDs: [sharedBabyID],
+            members: [
+                FamilyMemberSnapshot(userID: userID, role: .owner, joinedAt: serverNow.addingTimeInterval(-100), removedAt: nil)
+            ],
+            createdAt: serverNow.addingTimeInterval(-200),
+            updatedAt: serverNow.addingTimeInterval(-10),
+            version: 5,
+            deletedAt: nil
+        )
+
+        let mock = MockSupabaseService(
+            serverNow: serverNow,
+            familyGroups: [groupID: remoteGroup]
+        )
+        let testDefaults = UserDefaults(suiteName: "sync-cursor-test-\(UUID().uuidString)")!
+        let cursorStore = SyncCursorStore(defaults: testDefaults, keyPrefix: "test.cursor")
+        let engine = SyncEngine(
+            modelContext: environment.modelContext,
+            supabaseService: mock,
+            currentUserIDProvider: { userID },
+            nowProvider: { environment.now.value },
+            cursorStore: cursorStore
+        )
+
+        await engine.performFullSync(reason: .manual)
+
+        let fetchedGroup = try fetchFamilyGroup(id: groupID, in: environment.modelContext)
+        #expect(fetchedGroup?.ownerUserID == userID)
+        #expect(fetchedGroup?.inviteCode == "SPROUT99")
+        #expect(fetchedGroup?.inviteState == .active)
+        #expect(fetchedGroup?.sharedBabyIDs == [sharedBabyID])
+        #expect(fetchedGroup?.memberPayloads == remoteGroup.members)
+        #expect(fetchedGroup?.remoteVersion == 5)
+        #expect(fetchedGroup?.syncState == .synced)
+        #expect(cursorStore.load(for: userID).familyGroupsAt == serverNow)
+    }
+
     @Test("push pipeline soft deletes tombstones in fixed order and clears local tombstones")
     func pushPipelineDeletesInFixedOrder() async throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_100_000))
@@ -1420,6 +1511,12 @@ struct SyncEngineTests {
 
     private func fetchMemory(id: UUID, in context: ModelContext) throws -> MemoryEntry? {
         var descriptor = FetchDescriptor<MemoryEntry>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    private func fetchFamilyGroup(id: UUID, in context: ModelContext) throws -> FamilyGroup? {
+        var descriptor = FetchDescriptor<FamilyGroup>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
         return try context.fetch(descriptor).first
     }

@@ -5,7 +5,8 @@ struct FamilyGroupView: View {
     let babyRepository: BabyRepository
 
     @Environment(\.dismiss) private var dismiss
-    @State private var sharedBabyNames: [String] = []
+    @State private var inviteCode = ""
+    @State private var babies: [BabyProfile] = []
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -14,6 +15,10 @@ struct FamilyGroupView: View {
                 if let familyGroup = store.currentFamilyGroup {
                     inviteCard(familyGroup)
                     sharedBabiesCard(familyGroup)
+                    if store.ownershipState == .owner {
+                        shareManagementCard(familyGroup)
+                        membersCard(familyGroup)
+                    }
                 }
             }
             .padding(.horizontal, AppTheme.Spacing.screenHorizontal)
@@ -59,7 +64,7 @@ struct FamilyGroupView: View {
             if store.currentFamilyGroup == nil {
                 Button(action: {
                     guard store.createFamilyGroup() else { return }
-                    refreshSharedBabyNames()
+                    refresh()
                     AppHaptics.lightImpact()
                 }) {
                     Text(L10n.text("family_group.create", en: "Create Family Group", zh: "创建家庭组"))
@@ -71,6 +76,36 @@ struct FamilyGroupView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.text("family_group.join.prompt", en: "Have an invite code?", zh: "已有邀请码？"))
+                        .font(AppTheme.Typography.meta)
+                        .foregroundStyle(AppTheme.Colors.secondaryText)
+
+                    TextField(
+                        L10n.text("family_group.join.placeholder", en: "Invite code", zh: "邀请码"),
+                        text: $inviteCode
+                    )
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled(true)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(AppTheme.Colors.iconBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                    Button(action: joinFamilyGroup) {
+                        Text(L10n.text("family_group.join.action", en: "Join Family Group", zh: "加入家庭组"))
+                            .font(AppTheme.Typography.sheetBody)
+                            .foregroundStyle(AppTheme.Colors.primaryText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
+                            .background(AppTheme.Colors.iconBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.top, 4)
             }
 
             if let error = store.error {
@@ -96,6 +131,12 @@ struct FamilyGroupView: View {
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .foregroundStyle(AppTheme.Colors.primaryText)
                 .textSelection(.enabled)
+
+            if let inviteStatus = inviteStatusText(for: familyGroup) {
+                Text(inviteStatus)
+                    .font(AppTheme.Typography.meta)
+                    .foregroundStyle(AppTheme.Colors.secondaryText)
+            }
 
             if store.ownershipState == .owner {
                 Button(action: {
@@ -126,7 +167,9 @@ struct FamilyGroupView: View {
                 .font(AppTheme.Typography.cardTitle)
                 .foregroundStyle(AppTheme.Colors.primaryText)
 
-            if familyGroup.sharedBabyIDs.isEmpty {
+            let sharedBabies = babies.filter { familyGroup.sharedBabyIDs.contains($0.id) }
+
+            if sharedBabies.isEmpty {
                 Text(L10n.text(
                     "family_group.shared_babies.empty",
                     en: "No babies are shared yet.",
@@ -135,12 +178,135 @@ struct FamilyGroupView: View {
                 .font(AppTheme.Typography.cardBody)
                 .foregroundStyle(AppTheme.Colors.secondaryText)
             } else {
-                ForEach(sharedBabyNames, id: \.self) { name in
-                    Text(name)
-                        .font(AppTheme.Typography.sheetBody)
-                        .foregroundStyle(AppTheme.Colors.primaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
+                ForEach(sharedBabies, id: \.id) { baby in
+                    HStack(spacing: 12) {
+                        Text(baby.name)
+                            .font(AppTheme.Typography.sheetBody)
+                            .foregroundStyle(AppTheme.Colors.primaryText)
+                        Spacer(minLength: 8)
+                        Text(L10n.text("family_group.shared_babies.shared", en: "Shared", zh: "已共享"))
+                            .font(AppTheme.Typography.meta)
+                            .foregroundStyle(AppTheme.Colors.secondaryText)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .padding(AppTheme.Spacing.section)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
+        .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+    }
+
+    private func shareManagementCard(_ familyGroup: FamilyGroup) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.text("family_group.manage_babies.title", en: "Share Babies", zh: "共享宝宝"))
+                .font(AppTheme.Typography.cardTitle)
+                .foregroundStyle(AppTheme.Colors.primaryText)
+
+            if babies.isEmpty {
+                Text(L10n.text(
+                    "family_group.manage_babies.empty",
+                    en: "Add a baby first to share it here.",
+                    zh: "先添加宝宝，再在这里设置共享。"
+                ))
+                .font(AppTheme.Typography.cardBody)
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+            } else {
+                ForEach(babies, id: \.id) { baby in
+                    let isShared = familyGroup.sharedBabyIDs.contains(baby.id)
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(baby.name)
+                                .font(AppTheme.Typography.sheetBody)
+                                .foregroundStyle(AppTheme.Colors.primaryText)
+                            Text(isShared
+                                 ? L10n.text("family_group.manage_babies.shared", en: "Visible to family", zh: "家人可见")
+                                 : L10n.text("family_group.manage_babies.private", en: "Only you can see this", zh: "仅你可见"))
+                                .font(AppTheme.Typography.meta)
+                                .foregroundStyle(AppTheme.Colors.secondaryText)
+                        }
+                        Spacer(minLength: 8)
+                        Button(action: {
+                            guard store.setBabyShared(babyID: baby.id, shared: !isShared) else { return }
+                            refresh()
+                            AppHaptics.selection()
+                        }) {
+                            Text(isShared
+                                 ? L10n.text("family_group.manage_babies.unshare", en: "Unshare", zh: "取消共享")
+                                 : L10n.text("family_group.manage_babies.share", en: "Share", zh: "共享"))
+                                .font(AppTheme.Typography.meta)
+                                .foregroundStyle(AppTheme.Colors.primaryText)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(AppTheme.Colors.iconBackground)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .padding(AppTheme.Spacing.section)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous))
+        .shadow(color: AppTheme.Shadow.color, radius: AppTheme.Shadow.radius, y: AppTheme.Shadow.y)
+    }
+
+    private func membersCard(_ familyGroup: FamilyGroup) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.text("family_group.members.title", en: "Members", zh: "成员"))
+                .font(AppTheme.Typography.cardTitle)
+                .foregroundStyle(AppTheme.Colors.primaryText)
+
+            let activeMembers = familyGroup.memberPayloads.filter { $0.removedAt == nil }
+
+            if activeMembers.isEmpty {
+                Text(L10n.text(
+                    "family_group.members.empty",
+                    en: "No members yet.",
+                    zh: "还没有成员。"
+                ))
+                .font(AppTheme.Typography.cardBody)
+                .foregroundStyle(AppTheme.Colors.secondaryText)
+            } else {
+                ForEach(activeMembers, id: \.userID) { member in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(memberLabel(for: member))
+                                .font(AppTheme.Typography.sheetBody)
+                                .foregroundStyle(AppTheme.Colors.primaryText)
+                            Text(member.role == .owner
+                                 ? L10n.text("family_group.members.owner", en: "Owner", zh: "创建者")
+                                 : L10n.text("family_group.members.member", en: "Member", zh: "成员"))
+                                .font(AppTheme.Typography.meta)
+                                .foregroundStyle(AppTheme.Colors.secondaryText)
+                        }
+                        Spacer(minLength: 8)
+                        if member.role == .member {
+                            Button(action: {
+                                guard store.removeMember(userID: member.userID) else { return }
+                                refresh()
+                                AppHaptics.selection()
+                            }) {
+                                Text(L10n.text("family_group.members.remove", en: "Remove", zh: "移除"))
+                                    .font(AppTheme.Typography.meta)
+                                    .foregroundStyle(AppTheme.Colors.primaryText)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(AppTheme.Colors.iconBackground)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
                 }
             }
         }
@@ -187,17 +353,42 @@ struct FamilyGroupView: View {
 
     private func refresh() {
         _ = store.loadCurrentFamilyGroup()
-        refreshSharedBabyNames()
+        refreshBabies()
     }
 
-    private func refreshSharedBabyNames() {
-        guard let group = store.currentFamilyGroup else {
-            sharedBabyNames = []
-            return
+    private func refreshBabies() {
+        babies = (try? babyRepository.fetchBabies()) ?? []
+    }
+
+    private func joinFamilyGroup() {
+        let code = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+        guard store.joinFamilyGroup(inviteCode: code) else { return }
+        inviteCode = ""
+        refresh()
+        AppHaptics.lightImpact()
+    }
+
+    private func inviteStatusText(for familyGroup: FamilyGroup) -> String? {
+        switch familyGroup.inviteState {
+        case .active:
+            if let expiresAt = familyGroup.inviteExpiresAt, expiresAt <= Date.now {
+                return L10n.text("family_group.invite.expired", en: "Expired", zh: "已过期")
+            }
+            return L10n.text("family_group.invite.active", en: "Active", zh: "有效")
+        case .expired:
+            return L10n.text("family_group.invite.expired", en: "Expired", zh: "已过期")
+        case .revoked:
+            return L10n.text("family_group.invite.revoked", en: "Revoked", zh: "已撤销")
         }
-        let sharedIDs = Set(group.sharedBabyIDs)
-        sharedBabyNames = ((try? babyRepository.fetchBabies()) ?? [])
-            .filter { sharedIDs.contains($0.id) }
-            .map(\.name)
+    }
+
+    private func memberLabel(for member: FamilyMemberSnapshot) -> String {
+        if member.userID == store.currentUserID {
+            return L10n.text("family_group.members.you", en: "You", zh: "你")
+        }
+
+        let prefix = member.userID.uuidString.prefix(4).uppercased()
+        return "\(L10n.text("family_group.members.member_prefix", en: "Member", zh: "成员")) \(prefix)"
     }
 }

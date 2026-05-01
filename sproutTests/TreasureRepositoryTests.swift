@@ -31,6 +31,85 @@ final class TreasureRepositoryTests: XCTestCase {
         XCTAssertNil(entry.remoteVersion)
     }
 
+    func testCreateMemoryEntryStampsCurrentUserAuthorshipWhenAvailable() throws {
+        let currentUserID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = TreasureRepository(
+            modelContext: environment.modelContext,
+            currentUserIDProvider: { currentUserID }
+        )
+
+        let entry = try repository.createMemoryEntry(
+            note: "宝宝今天笑了",
+            imageLocalPaths: [],
+            isMilestone: false,
+            createdAt: environment.now.value,
+            birthDate: HomeHeaderConfig.placeholder.birthDate
+        )
+
+        XCTAssertEqual(entry.createdByUserID, currentUserID)
+        XCTAssertEqual(entry.updatedByUserID, currentUserID)
+    }
+
+    func testSharedMemoryEntryRejectsDeleteFromNonAuthor() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let authorID = UUID()
+        let babyID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = TreasureRepository(
+            modelContext: environment.modelContext,
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let entry = MemoryEntry(
+            babyID: babyID,
+            createdAt: environment.now.value,
+            ageInDays: 1,
+            createdByUserID: authorID,
+            updatedByUserID: authorID,
+            note: "来自家人的照片"
+        )
+        environment.modelContext.insert(entry)
+        try environment.modelContext.save()
+
+        XCTAssertThrowsError(try repository.deleteMemoryEntry(id: entry.id, removeImage: false)) { error in
+            XCTAssertEqual(error as? TreasureRepositoryError, .permissionDenied(entry.id))
+        }
+
+        XCTAssertNotNil(try repository.fetchMemoryEntry(id: entry.id))
+    }
+
+    func testSharedMemoryEntryAllowsAuthorDelete() throws {
+        let ownerID = UUID()
+        let currentUserID = UUID()
+        let babyID = UUID()
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
+        let repository = TreasureRepository(
+            modelContext: environment.modelContext,
+            currentUserIDProvider: { currentUserID },
+            accessProvider: { requestedBabyID in
+                requestedBabyID == babyID ? FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID)) : nil
+            }
+        )
+        let entry = MemoryEntry(
+            babyID: babyID,
+            createdAt: environment.now.value,
+            ageInDays: 1,
+            createdByUserID: currentUserID,
+            updatedByUserID: currentUserID,
+            note: "自己的照片"
+        )
+        environment.modelContext.insert(entry)
+        try environment.modelContext.save()
+
+        try repository.deleteMemoryEntry(id: entry.id, removeImage: false)
+
+        XCTAssertNil(try repository.fetchMemoryEntry(id: entry.id))
+    }
+
     func testFetchMemoryEntriesReturnsOnlyActiveBabyEntries() throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_710_000_000))
         let activeBabyID = UUID()

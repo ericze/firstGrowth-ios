@@ -1,6 +1,7 @@
 import Foundation
 
 struct SyncCursor: Codable, Equatable, Sendable {
+    var familyGroupsAt: Date?
     var babyProfilesAt: Date?
     var recordItemsAt: Date?
     var memoryEntriesAt: Date?
@@ -8,7 +9,7 @@ struct SyncCursor: Codable, Equatable, Sendable {
 
 @MainActor
 final class SyncCursorStore {
-    private let defaults: UserDefaults
+    nonisolated(unsafe) private let defaults: UserDefaults
     private let keyPrefix: String
 
     nonisolated init(defaults: UserDefaults = .standard, keyPrefix: String = "sync.cursor") {
