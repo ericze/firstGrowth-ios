@@ -229,6 +229,133 @@ struct SproutAppStartupTests {
         }
     }
 
+    @Test("FamilyGroup array fields survive current-schema disk round trip")
+    func testFamilyGroupArrayFieldsSurviveCurrentSchemaDiskRoundTrip() async throws {
+        let storeURL = try Self.makeTemporaryStoreURL(named: "family-group-array-round-trip")
+        defer {
+            try? FileManager.default.removeItem(at: storeURL.deletingLastPathComponent())
+        }
+
+        let familyID = UUID()
+        let ownerID = UUID()
+        let sharedBabyIDs = [UUID(), UUID()]
+        let joinedAt = Date(timeIntervalSince1970: 1_715_200_000)
+        let removedAt = Date(timeIntervalSince1970: 1_715_286_400)
+        let memberPayloads = [
+            FamilyMemberSnapshot(
+                userID: ownerID,
+                role: .owner,
+                joinedAt: joinedAt,
+                removedAt: nil
+            ),
+            FamilyMemberSnapshot(
+                userID: UUID(),
+                role: .member,
+                joinedAt: joinedAt.addingTimeInterval(60),
+                removedAt: removedAt
+            ),
+        ]
+
+        do {
+            let schema = SproutSchemaRegistry.schema
+            let configuration = ModelConfiguration(schema: schema, url: storeURL)
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let context = ModelContext(container)
+
+            context.insert(
+                FamilyGroup(
+                    id: familyID,
+                    ownerUserID: ownerID,
+                    inviteCode: "SPROUT42",
+                    inviteExpiresAt: joinedAt.addingTimeInterval(3_600),
+                    inviteState: .active,
+                    sharedBabyIDs: sharedBabyIDs,
+                    memberPayloads: memberPayloads,
+                    remoteVersion: 7,
+                    syncStateRaw: SyncState.synced.rawValue,
+                    createdAt: joinedAt,
+                    updatedAt: joinedAt
+                )
+            )
+
+            try context.save()
+        }
+
+        do {
+            let schema = SproutSchemaRegistry.schema
+            let configuration = ModelConfiguration(schema: schema, url: storeURL)
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let context = ModelContext(container)
+
+            let families = try context.fetch(FetchDescriptor<FamilyGroup>())
+            #expect(families.count == 1)
+            let fetchedFamily = try #require(families.first)
+            #expect(fetchedFamily.id == familyID)
+            #expect(fetchedFamily.ownerUserID == ownerID)
+            #expect(fetchedFamily.sharedBabyIDs == sharedBabyIDs)
+            #expect(fetchedFamily.memberPayloads == memberPayloads)
+            #expect(fetchedFamily.remoteVersion == 7)
+            #expect(fetchedFamily.syncState == .synced)
+        }
+    }
+
+    @Test("V2 to V4 migration preserves WeeklyLetter metadata and defaults legacy authorship")
+    func testV2ToV4MigrationPreservesWeeklyLetterMetadataAndDefaultsAuthorship() async throws {
+        let storeURL = try Self.makeTemporaryStoreURL(named: "v2-to-v4-migration")
+        defer {
+            try? FileManager.default.removeItem(at: storeURL.deletingLastPathComponent())
+        }
+
+        let babyID = UUID()
+        let letterID = UUID()
+        let recordID = UUID()
+        let memoryID = UUID()
+        let weekStart = Date(timeIntervalSince1970: 1_714_614_400)
+        let weekEnd = Date(timeIntervalSince1970: 1_715_219_200)
+        let generatedAt = Date(timeIntervalSince1970: 1_715_200_000)
+
+        try Self.seedV2Store(
+            at: storeURL,
+            babyID: babyID,
+            letterID: letterID,
+            recordID: recordID,
+            memoryID: memoryID,
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            generatedAt: generatedAt
+        )
+
+        let schema = SproutSchemaRegistry.schema
+        let configuration = ModelConfiguration(schema: schema, url: storeURL)
+        let container = try ModelContainer(
+            for: schema,
+            migrationPlan: SproutMigrationPlan.self,
+            configurations: [configuration]
+        )
+        let context = ModelContext(container)
+
+        let letters = try context.fetch(FetchDescriptor<WeeklyLetter>())
+        #expect(letters.count == 1)
+        let migratedLetter = try #require(letters.first)
+        #expect(migratedLetter.id == letterID)
+        #expect(migratedLetter.weekStart == weekStart)
+        #expect(migratedLetter.weekEnd == weekEnd)
+        #expect(migratedLetter.languageCode == "en")
+        #expect(migratedLetter.sourceSignature == "source-v2")
+        #expect(migratedLetter.generatedBy == "composer-v2")
+        #expect(migratedLetter.generatedAt == generatedAt)
+
+        let migratedRecord = try #require(try context.fetch(FetchDescriptor<RecordItem>()).first)
+        #expect(migratedRecord.id == recordID)
+        #expect(migratedRecord.createdByUserID == nil)
+        #expect(migratedRecord.updatedByUserID == nil)
+
+        let migratedMemory = try #require(try context.fetch(FetchDescriptor<MemoryEntry>()).first)
+        #expect(migratedMemory.id == memoryID)
+        #expect(migratedMemory.createdByUserID == nil)
+        #expect(migratedMemory.updatedByUserID == nil)
+    }
+
     @Test("V3 to V4 migration preserves WeeklyLetter metadata and defaults legacy authorship")
     func testV3ToV4MigrationPreservesWeeklyLetterMetadataAndDefaultsAuthorship() async throws {
         let storeURL = try Self.makeTemporaryStoreURL(named: "v3-to-v4-migration")
@@ -383,6 +510,67 @@ struct SproutAppStartupTests {
             .appendingPathComponent("sprout-tests-\(name)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("default.store")
+    }
+
+    private static func seedV2Store(
+        at storeURL: URL,
+        babyID: UUID,
+        letterID: UUID,
+        recordID: UUID,
+        memoryID: UUID,
+        weekStart: Date,
+        weekEnd: Date,
+        generatedAt: Date
+    ) throws {
+        let schema = Schema(SproutSchemaV2.models, version: SproutSchemaV2.versionIdentifier)
+        let configuration = ModelConfiguration(schema: schema, url: storeURL)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = ModelContext(container)
+
+        context.insert(
+            SproutSchemaV2.BabyProfile(
+                id: babyID,
+                name: "Sprout",
+                birthDate: Date(timeIntervalSince1970: 1_700_000_000),
+                createdAt: Date(timeIntervalSince1970: 1_700_000_001)
+            )
+        )
+        context.insert(
+            SproutSchemaV2.RecordItem(
+                id: recordID,
+                babyID: babyID,
+                timestamp: Date(timeIntervalSince1970: 1_714_700_000),
+                type: "milk",
+                value: 120
+            )
+        )
+        context.insert(
+            SproutSchemaV2.MemoryEntry(
+                id: memoryID,
+                babyID: babyID,
+                createdAt: Date(timeIntervalSince1970: 1_714_800_000),
+                ageInDays: 42,
+                imageLocalPath: "memory.jpg",
+                note: "legacy memory",
+                isMilestone: false
+            )
+        )
+        context.insert(
+            SproutSchemaV2.WeeklyLetter(
+                id: letterID,
+                weekStart: weekStart,
+                weekEnd: weekEnd,
+                density: .normal,
+                collapsedText: "collapsed",
+                expandedText: "expanded",
+                languageCode: "en",
+                sourceSignature: "source-v2",
+                generatedBy: "composer-v2",
+                generatedAt: generatedAt
+            )
+        )
+
+        try context.save()
     }
 
     private static func seedV3Store(
