@@ -51,6 +51,12 @@ Config/                本地构建配置示例和环境配置
 docs/                  PRD、规格、验收、发布与实现计划
 ```
 
+## 进度控制
+
+根目录 `PROJECT_PROGRESS.md` 是项目进度唯一真源。每次完成代码、文档、测试、配置或发布相关任务后，必须同步更新该文件。
+
+如果任务改变了模块状态、风险、阻塞、验收结果或下一步优先级，必须更新 `PROJECT_PROGRESS.md` 的对应章节；小修复也至少追加到「最近完成」或「验证记录」。
+
 核心边界：
 
 - `Features` 负责渲染、布局和交互接线，不承载复杂业务逻辑。
@@ -70,7 +76,12 @@ cp Config/Supabase.xcconfig.example Config/Supabase.local.xcconfig
 
    `SUPABASE_URL` 必须填写项目根地址，例如 `https://<project-ref>.supabase.co`，不要填写 `/rest/v1/` endpoint。
 
-4. 在 Supabase SQL Editor 执行 `supabase/migrations/202604270001_account_cloud_sync.sql`，创建账号同步所需的表、RPC、RLS policy 和私有 Storage bucket。
+4. 在 Supabase SQL Editor 按文件名顺序执行以下迁移，创建账号同步、家庭组同步、RPC、RLS policy 和私有 Storage bucket：
+
+```bash
+supabase/migrations/202604270001_account_cloud_sync.sql
+supabase/migrations/202605010001_family_group_1_0.sql
+```
 
 5. 构建并运行到 iOS 17.0+ 模拟器或真机。
 
@@ -81,10 +92,12 @@ cp Config/Supabase.xcconfig.example Config/Supabase.local.xcconfig
 使用 Xcode Test 运行 `sproutTests`，或通过命令行执行：
 
 ```bash
+xcodebuild -showdestinations -project sprout.xcodeproj -scheme sprout
+
 xcodebuild test \
   -project sprout.xcodeproj \
   -scheme sprout \
-  -destination 'platform=iOS Simulator,name=iPhone 15'
+  -destination 'id=<simulator-id>'
 ```
 
 测试覆盖重点包括：
@@ -96,15 +109,43 @@ xcodebuild test \
 - Supabase 配置校验、Auth 管理、真实服务 smoke 测试门控与真实数据链 smoke。
 - 国际化语言状态、模板和本地化格式。
 
-真实 Supabase smoke 默认跳过外部连接；只有显式设置以下环境变量时才会登录真实后端。当前真实 smoke 覆盖 Auth 登录 / 退出、`server_now`、`baby_profiles` / `record_items` / `memory_entries` 的 upsert / fetch / soft delete，以及私有 Storage 上传 / 下载 / 删除：
+默认发布门禁不需要任何 Supabase secret，必须保持 deterministic：
 
 ```bash
-SPROUT_REAL_SUPABASE_SMOKE=1
-SPROUT_SUPABASE_URL=https://<project-ref>.supabase.co
-SPROUT_SUPABASE_ANON_KEY=<anon-key>
-SPROUT_SUPABASE_TEST_EMAIL=<test-user-email>
-SPROUT_SUPABASE_TEST_PASSWORD=<test-user-password>
+xcodebuild test \
+  -project sprout.xcodeproj \
+  -scheme sprout \
+  -destination 'id=<simulator-id>' \
+  CODE_SIGNING_ALLOWED=NO
 ```
+
+真实 Supabase smoke 默认跳过外部连接；只有显式设置以下环境变量时才会登录真实后端。不要提交真实 URL、anon key 或测试账号密码。
+
+```bash
+export SPROUT_REAL_SUPABASE_SMOKE=1
+export SPROUT_SUPABASE_URL=https://<project-ref>.supabase.co
+export SPROUT_SUPABASE_ANON_KEY=<anon-key>
+export SPROUT_SUPABASE_TEST_EMAIL=<test-user-email>
+export SPROUT_SUPABASE_TEST_PASSWORD=<test-user-password>
+
+xcodebuild test \
+  -project sprout.xcodeproj \
+  -scheme sprout \
+  -destination 'id=<simulator-id>' \
+  CODE_SIGNING_ALLOWED=NO \
+  -only-testing:sproutTests/RealSupabaseServiceSmokeTests
+```
+
+真实 smoke 覆盖 Auth 登录 / 退出、`server_now`、`baby_profiles` / `record_items` / `memory_entries` / `family_groups` 的 upsert / fetch / soft delete、私有 Storage 上传 / 下载 / 删除，以及 soft-delete tombstone 的增量拉取。测试账号应是专用账号；smoke 会在运行前清理该账号下仍 active 的 family group，以便重复运行。
+
+双设备发布验收路径：
+
+1. 在真实 Supabase 项目执行两份迁移，并准备一个专用测试账号。
+2. 设备 A 登录测试账号，创建宝宝、记录、珍藏记忆、头像或食物 / 珍藏图片，创建 family group 并共享宝宝。
+3. 设备 B 登录同一测试账号，手动触发 Cloud Sync，确认 baby / record / memory / family group / asset 都能拉取。
+4. 设备 B 修改记录或珍藏记忆；设备 A 手动同步，确认增量更新可见。
+5. 设备 A 删除记录、记忆和宝宝头像相关资产；设备 B 同步后确认 tombstone 生效且本地未丢失其他数据。
+6. 使用真实 smoke 或 `soft_delete_row('family_groups', ...)` RPC 删除专用测试账号的 family group；设备 B 同步后确认 family group tombstone 可见，家庭组入口回到无 group 状态。
 
 ## 开发约束
 

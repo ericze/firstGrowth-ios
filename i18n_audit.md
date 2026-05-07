@@ -1,5 +1,35 @@
 # sprout i18n 审计
 
+> 2026-05-06 同步说明：本文最初记录的是早期 i18n 审计结果。当前代码已经完成一批国际化基础设施与双语改造，包括 `sprout/Localization/Localizable.xcstrings`、`sprout/en.lproj/InfoPlist.strings`、`sprout/zh-Hans.lproj/InfoPlist.strings`、`AppLanguageManager`、`LocalizationService`、`L10n`、`LocaleFormatter`、应用内语言切换，以及部分动态文案 renderer。以下内容保留原始审计问题，但已补充当前状态，后续判断以 `PROJECT_PROGRESS.md` 为进度唯一真源。
+
+## 2026-05-06 本轮同步
+
+### 已完成
+
+- 用 `rg` 重新扫描 `sprout/Features/Onboarding`、`Home`、`Growth`、`Treasure`、`Shell` 与 `Shared`，复核用户可见中文和裸英文入口。
+- 为 P0 路径补齐 `Localizable.xcstrings` 资源缺口：本轮重点清理的是已经接入 `L10n.text` / `L10n.format` 但未写入字符串资源表的 key。
+- `LanguageRegionView` 的语言切换按钮不再直接硬编码 `"English"` / `"中文"`，改为走字符串资源。
+- 新增 `sproutTests/LocalizationCatalogCoverageTests.swift`，自动校验 P0 feature / shared 层使用的本地化 key 都存在于 `Localizable.xcstrings`。
+
+### 本轮扫描结论
+
+- P0 主路径的“资源缺口”已补齐：Onboarding、Home、Growth、Treasure、Shell、Shared 当前引用到的 `L10n` key 已全部进入字符串资源表。
+- 仍存在一批“非资源缺口型”国际化工作，主要集中在动态 formatter、历史生成内容、单位/日期样式和人工截图验收，见下文待验收项。
+
+### 仍需人工截图验收的页面
+
+- Onboarding：身份信息页、权限请求页
+- Home：今日时间线、空状态、进行中睡眠条、奶/尿布/睡眠/辅食编辑与删除确认
+- Growth：概览卡、生命线图表空态/错误态、录入 sheet、手动输入、里程碑列表与录入
+- Treasure：时间线、空态/错误态、月穿梭、Compose modal、Weekly Letter 卡片与详情
+- Shell：Sidebar、Language & Region、Baby Profile、Account、Cloud Sync、Family Group、Paywall、启动错误页
+
+### 剩余观察项
+
+- `TimelineContentFormatter`、`GrowthFormatter`、Treasure 日期范围与单位展示仍需持续做中英文截图回归，确认无截断、无英文句点/复数异常、无混合语言残留。
+- `WeeklyLetter` 历史语言策略保持不变：历史内容保留生成时语言，新生成内容跟随当前语言；本轮未改动该策略，但发布前仍需人工验收周信中英切换表现。
+- `TreasureComposeModal`、Growth / Home 若字符串资源缺失时仍保留内联 fallback；当前主路径依赖资源表，后续可继续收敛 fallback 文案来源，但不属于本轮 P0 阻塞项。
+
 ## 已审计范围
 
 - 代码目录：`sprout/Features/Home`、`sprout/Features/Growth`、`sprout/Features/Treasure`、`sprout/Features/Shell`
@@ -12,9 +42,10 @@
 
 ### 1. 国际化基础设施现状
 
-- 当前仓库未发现 `Localizable.strings`、`InfoPlist.strings`、`.xcstrings`，也未发现 `NSLocalizedString`、`String(localized:)`、`LocalizedStringKey` 的工程化接线。
-- 工程虽然开启了 `STRING_CATALOG_GENERATE_SYMBOLS = YES` 与 `SWIFT_EMIT_LOC_STRINGS = YES`，但没有实际字符串资源文件可承接。
-- `sprout.xcodeproj/project.pbxproj:169` 的 `developmentRegion = en`，`knownRegions` 只有 `en` 和 `Base`；当前代码主体却是中文硬编码，默认区域与实际内容不一致。
+- 当前代码已接入 `sprout/Localization/Localizable.xcstrings`，并通过 `L10n.text` / `L10n.format`、`LocalizationService`、`LocaleFormatter` 和 `AppLanguageManager` 承接运行时语言选择。
+- `sprout/en.lproj/InfoPlist.strings` 与 `sprout/zh-Hans.lproj/InfoPlist.strings` 已承接 App Display Name、相机和相册权限说明。
+- `sprout.xcodeproj/project.pbxproj` 已包含 `en`、`Base`、`zh-Hans` known regions，默认 development region 仍为 `en`。
+- 剩余风险不再是“没有资源层”，而是：历史审计中列出的部分字符串、动态 formatter、持久化生成内容、accessibility 文案和旧文档描述仍需持续清理与验收。
 
 ### 2. 硬编码中文字符串
 
@@ -180,20 +211,19 @@
 
 ### P0
 
-- 没有任何国际化资源层与接线层：当前所有 UI 文案、toast、alert、accessibility、权限文案都直接写死在 Swift 或 build settings 中。
-- `GrowthFormatter` 与 `WeeklyLetterComposer` 直接生成中文整句，`GrowthAIContent` 与 `WeeklyLetter` 只存最终展示文本，没有 locale-neutral 数据层。
-- `WeeklyLetter` 持久化中文 `collapsedText / expandedText`；历史数据无法随语言切换重渲染，属于双语落地的直接阻塞项。
-- 权限文案没有资源化，且描述范围只覆盖辅食，不覆盖珍藏拍照/选图入口；双语和准确性都会出问题。
-- Treasure 时间格式被 `en_US_POSIX + MMM d + uppercased()` 锁死，Growth/Timeline 数值与时长又被中文手工拼接；格式层没有统一 locale 策略。
+- 继续清理用户可见硬编码文案：重点复核 Home / Growth / Treasure / Shell 的静态 UI、toast、alert、accessibility 和错误文案，避免新增裸文本。
+- 继续复核动态 formatter：`TimelineContentFormatter`、`GrowthFormatter`、Treasure 日期范围、时长、数值、单位和列表连接必须全部走 locale-aware 路径。
+- 继续验证生成内容策略：`WeeklyLetter` 已加入 `languageCode`、`sourceSignature`、`generatedBy` 元数据，但 `collapsedText / expandedText` 仍是最终文案；历史内容按生成时语言保留，新生成内容应跟随当前语言。
+- 继续验证权限文案：InfoPlist 双语资源已存在，发布前仍需确认“记录照片”的泛化表述覆盖 Home 辅食与 Treasure 珍藏两类入口。
 
 ### P1
 
-- 枚举和 ViewState 暴露展示文本，业务层与展示层耦合：`HomeModule`、`GrowthMetric`、`DiaperSubtype`、`MilkTab`、`NursingSide`、`UndoToastState`、`GrowthMetaInfo`、`TreasureMonthAnchor`
-- `RecordItem.tags` 与 `HomeStore.commonFoodTags` 会在双语环境中产生中英混存，推荐词与历史记录难以保持一致
-- 成长错误文案在 store 中存在但未渲染；首页失败只有断言没有用户反馈，错误态策略不一致
-- 测试以中文整句为断言对象，重构 formatter / template provider 时会造成大面积测试脆弱性
-- 侧边栏当前承担“设置入口”语义，但实现是静态中文说明卡；后续英文命名与信息架构边界需要先确认
-- `CFBundleDisplayName = "初长"` 为单语言配置；是否跟随语言切换属于产品决策，当前工程没有承接方式
+- 复核枚举和 ViewState 是否仍暴露最终展示文本：`HomeModule`、`GrowthMetric`、`DiaperSubtype`、`MilkTab`、`NursingSide`、`UndoToastState`、`GrowthMetaInfo`、`TreasureMonthAnchor`。
+- 复核食材标签体系：`FoodTagCatalog` 与 AI 建议 canonicalization 已存在，但历史 `RecordItem.tags` 与用户自定义 tag 的双语显示策略仍需人工验收。
+- 统一错误态策略：成长、珍藏、首页、账号、云同步、家庭组均应有克制且可本地化的用户反馈。
+- 测试应继续减少对单一语言整句的脆弱绑定；新增测试优先断言语义、locale fixture 或关键片段。
+- 侧边栏已承担 Settings 入口，英文命名与信息架构仍需随发布文案统一复核。
+- `CFBundleDisplayName` 已通过 `InfoPlist.strings` 支持中英展示，发布前需确认英文名使用 `sprout` 是否最终拍板。
 
 ### P2
 
@@ -220,8 +250,8 @@
 
 ### 国际化资源组织方式
 
-- App UI：新增 `Localizable.xcstrings`
-- 权限与应用名：改为可本地化的 Info.plist 资源
+- App UI：继续维护 `sprout/Localization/Localizable.xcstrings`
+- 权限与应用名：继续维护 `sprout/en.lproj/InfoPlist.strings` 与 `sprout/zh-Hans.lproj/InfoPlist.strings`
 - key 建议按模块分组，不按页面截图命名：
   - `home.*`
   - `growth.*`
@@ -233,10 +263,10 @@
 
 ### 推荐接线顺序
 
-1. 先建资源层与 formatter 层
-2. 先替换静态 UI 文案和权限文案
-3. 再处理 formatter 产出的动态标题、toast、日期时长单位
-4. 最后处理成长 AI 卡与珍藏周信
+1. 以现有资源层与 formatter 层为基础，先补遗漏 key 和硬编码残留。
+2. 复核静态 UI 文案、权限文案、accessibility、错误态和空状态。
+3. 继续处理 formatter 产出的动态标题、toast、日期时长单位。
+4. 最后做成长解读与珍藏周信的发布级文案验收。
 
 ### 哪些模块先做
 
@@ -247,7 +277,7 @@
 ### 哪些模块先不动
 
 - 不翻译用户已输入的 `note`、`tags`
-- 不在本轮新增应用内语言切换；默认跟随系统语言
+- 应用内语言切换已接入；后续不自动翻译历史用户输入
 - 不在本轮改 storage key、rawValue、环境变量、断言字符串
 - 不把“单位体系切换”扩展成英制/美制功能，除非产品明确要求
 
@@ -268,11 +298,8 @@
 
 ### PR1：i18n 基础设施
 
-- 新增 `Localizable` 资源
-- 新增 `LocalizationService`
-- 新增 `LocaleFormatter`
-- 接入可本地化的权限文案与 app metadata
-- 不改业务流程，只打基础
+- 已完成基础设施主线：`Localizable.xcstrings`、`LocalizationService`、`LocaleFormatter`、`AppLanguageManager`、InfoPlist 双语资源。
+- 后续 PR1 类任务应只补缺口：缺失 key、残留硬编码、测试 fixture 和文档同步，不重新搭建平行体系。
 
 ### PR2：首页记录与 Shell 静态文案
 

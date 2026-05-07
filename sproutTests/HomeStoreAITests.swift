@@ -115,6 +115,37 @@ struct HomeStoreAITests {
         #expect(store.foodDraft.selectedTags.contains("Apple"))
     }
 
+    @Test("AI response with no usable candidates falls back to manual flow")
+    func testAIEmptySuggestionFallsBackToManualFlow() async throws {
+        let result = FoodAISuggestionResult(
+            candidateTags: [
+                FoodTagCandidate(tag: "Mystery Fruit", confidence: 0.9),
+            ],
+            candidateAllergenGroups: [],
+            textureStage: nil,
+            noteSuggestion: nil,
+            confidenceLevel: .medium
+        )
+        let (store, _) = try makeStoreWithMockAI(result: result)
+
+        store.foodDraft.selectedTags = ["Existing"]
+        store.foodDraft.note = "Keep manual note"
+        store.foodDraft.selectedImagePath = "/tmp/test_photo.jpg"
+
+        store.handle(.tapFoodAISuggest)
+
+        try await Task.sleep(for: .milliseconds(200))
+
+        guard case let .failed(message) = store.viewState.foodAIState else {
+            Issue.record("Expected failed state when AI has no usable suggestions, got \(store.viewState.foodAIState)")
+            return
+        }
+
+        #expect(message.localizedCaseInsensitiveContains("manual"))
+        #expect(store.foodDraft.selectedTags == ["Existing"])
+        #expect(store.foodDraft.note == "Keep manual note")
+    }
+
     @Test("AI suggestion with no image does nothing")
     func testAINoImageFails() throws {
         let (store, _) = try makeStoreWithMockAI()

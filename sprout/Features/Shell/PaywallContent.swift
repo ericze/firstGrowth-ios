@@ -19,8 +19,26 @@ struct PaywallContent {
 
     static let promotedCapabilities: Set<ProCapability> = []
 
+    static let releaseBlockedCapabilities: Set<ProCapability> = [
+        .familyGroup,
+        .cloudSync,
+        .aiAssistant,
+    ]
+
     static var isPurchaseEnabled: Bool {
         !promotedCapabilities.isEmpty
+    }
+
+    static var heroSubtitleKey: String {
+        isPurchaseEnabled ? "paywall.subtitle" : "paywall.readiness.subtitle"
+    }
+
+    static var heroSubtitleEN: String {
+        isPurchaseEnabled ? "Unlock all premium features" : "Subscriptions will open after release checks"
+    }
+
+    static var heroSubtitleZH: String {
+        isPurchaseEnabled ? "解锁全部高级功能" : "通过发布验收后再开放订阅"
     }
 
     static var promotedFeatures: [Feature] {
@@ -62,11 +80,11 @@ struct PaywallContent {
             capability: .aiAssistant,
             iconName: "brain",
             titleKey: "paywall.feature.ai.title",
-            titleEN: "AI Assistant",
-            titleZH: "AI 智能助手",
+            titleEN: "Food Suggestions",
+            titleZH: "辅食建议",
             detailKey: "paywall.feature.ai.detail",
-            detailEN: "Food advice, analysis & reports",
-            detailZH: "辅食建议、分析、周报"
+            detailEN: "Optional food tag suggestions from a photo",
+            detailZH: "基于照片的可选辅食标签建议"
         ),
     ]
 }

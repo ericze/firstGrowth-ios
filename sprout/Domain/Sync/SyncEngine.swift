@@ -315,6 +315,7 @@ final class SyncEngine {
             }
 
             // Overwrite local fields with server truth.
+            existing.ownerUserID = remote.userID
             existing.name = remote.name
             existing.birthDate = remote.birthDate
             existing.gender = remote.gender.flatMap { BabyProfile.Gender(rawValue: $0) }
@@ -330,6 +331,7 @@ final class SyncEngine {
 
             let baby = BabyProfile(
                 id: remote.id,
+                ownerUserID: remote.userID,
                 name: remote.name,
                 birthDate: remote.birthDate,
                 gender: remote.gender.flatMap { BabyProfile.Gender(rawValue: $0) },
@@ -784,7 +786,7 @@ final class SyncEngine {
     ) -> BabyProfileDTO {
         BabyProfileDTO(
             id: baby.id,
-            userID: userID,
+            userID: baby.ownerUserID ?? userID,
             name: baby.name,
             birthDate: baby.birthDate,
             gender: baby.gender?.rawValue,

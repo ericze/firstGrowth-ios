@@ -74,7 +74,11 @@ struct PaywallView: View {
                 .font(AppTheme.Typography.sheetTitle)
                 .foregroundStyle(AppTheme.Colors.primaryText)
 
-            Text(L10n.text("paywall.subtitle", en: "Unlock all premium features", zh: "解锁全部高级功能"))
+            Text(L10n.text(
+                PaywallContent.heroSubtitleKey,
+                en: PaywallContent.heroSubtitleEN,
+                zh: PaywallContent.heroSubtitleZH
+            ))
                 .font(AppTheme.Typography.cardBody)
                 .foregroundStyle(AppTheme.Colors.secondaryText)
         }

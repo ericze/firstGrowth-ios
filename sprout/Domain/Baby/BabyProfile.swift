@@ -4,6 +4,7 @@ import SwiftData
 @Model
 final class BabyProfile {
     @Attribute(.unique) var id: UUID
+    var ownerUserID: UUID?
     var name: String
     var birthDate: Date
     var gender: Gender?
@@ -29,6 +30,7 @@ final class BabyProfile {
 
     init(
         id: UUID = UUID(),
+        ownerUserID: UUID? = nil,
         name: String = BabyProfile.defaultName,
         birthDate: Date = .now,
         gender: Gender? = nil,
@@ -41,6 +43,7 @@ final class BabyProfile {
         hasCompletedOnboarding: Bool = false
     ) {
         self.id = id
+        self.ownerUserID = ownerUserID
         self.name = name
         self.birthDate = birthDate
         self.gender = gender

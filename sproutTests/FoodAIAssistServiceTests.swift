@@ -4,8 +4,8 @@ import Foundation
 
 struct FoodAIAssistServiceTests {
 
-    @Test("mock service returns valid suggestion")
-    func testMockServiceReturnsValidSuggestion() async throws {
+    @Test("mock service returns conservative fallback suggestion")
+    func testMockServiceReturnsConservativeFallbackSuggestion() async throws {
         let service = MockFoodAIAssistService()
         let allowedTags = ["Apple", "Banana", "Carrot", "Rice cereal"]
 
@@ -18,9 +18,9 @@ struct FoodAIAssistServiceTests {
 
         #expect(result.candidateTags.count == 3)
         #expect(result.candidateTags[0].tag == "Apple")
-        #expect(result.confidenceLevel == .high)
-        #expect(result.textureStage == "puree")
-        #expect(result.noteSuggestion == "Baby enjoyed this!")
+        #expect(result.confidenceLevel == .low)
+        #expect(result.textureStage == nil)
+        #expect(result.noteSuggestion == nil)
     }
 
     @Test("mock service throws configured error")

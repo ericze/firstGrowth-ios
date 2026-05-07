@@ -66,6 +66,7 @@ final class BabyRepository {
             guard try fetchActiveBaby() == nil else { return true }
             let baby = BabyProfile(
                 id: UUID(),
+                ownerUserID: nil,
                 syncStateRaw: SyncState.pendingUpsert.rawValue
             )
             modelContext.insert(baby)
@@ -92,7 +93,7 @@ final class BabyRepository {
 
         let sharedIDs = try sharedBabyOwnerMap(for: currentUserID)
         return AccessibleBabyGroups(
-            owned: babies.filter { sharedIDs[$0.id] == nil },
+            owned: babies.filter { sharedIDs[$0.id] == nil && isOwned($0, by: currentUserID) },
             shared: babies.filter { sharedIDs[$0.id] != nil }
         )
     }
@@ -128,6 +129,7 @@ final class BabyRepository {
             let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let baby = BabyProfile(
                 id: UUID(),
+                ownerUserID: currentUserID,
                 name: normalizedName.isEmpty ? BabyProfile.defaultName : normalizedName,
                 birthDate: birthDate,
                 gender: gender,
@@ -186,15 +188,17 @@ final class BabyRepository {
                 recordFailure(operation: "Activate accessible baby", reason: "Baby not found")
                 return false
             }
-            if let currentUserID,
-               let ownerID = try sharedBabyOwnerMap(for: currentUserID)[id] {
-                activeBabyState?.updateFrom(
-                    targetBaby,
-                    access: FamilyBabyAccess(babyID: targetBaby.id, ownership: .shared(ownerUserID: ownerID))
-                )
-                return true
+            if let access = try access(for: id, currentUserID: currentUserID) {
+                switch access.ownership {
+                case .owned:
+                    return activateBaby(id: id)
+                case .shared:
+                    activeBabyState?.updateFrom(targetBaby, access: access)
+                    return true
+                }
             }
-            return activateBaby(id: id)
+            recordFailure(operation: "Activate accessible baby", reason: "Baby is not accessible")
+            return false
         } catch {
             recordFailure(operation: "Activate accessible baby", error: error)
             return false
@@ -202,10 +206,12 @@ final class BabyRepository {
     }
 
     func access(for babyID: UUID, currentUserID: UUID?) throws -> FamilyBabyAccess? {
-        guard try fetchBaby(id: babyID) != nil else { return nil }
-        if let currentUserID,
-           let ownerID = try sharedBabyOwnerMap(for: currentUserID)[babyID] {
-            return FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID))
+        guard let baby = try fetchBaby(id: babyID) else { return nil }
+        if let currentUserID {
+            if let ownerID = try sharedBabyOwnerMap(for: currentUserID)[babyID] {
+                return FamilyBabyAccess(babyID: babyID, ownership: .shared(ownerUserID: ownerID))
+            }
+            guard isOwned(baby, by: currentUserID) else { return nil }
         }
         return FamilyBabyAccess(babyID: babyID, ownership: .owned)
     }
@@ -394,7 +400,7 @@ final class BabyRepository {
     private func ownedBabyCount(in babies: [BabyProfile], currentUserID: UUID?) throws -> Int {
         guard let currentUserID else { return babies.count }
         let sharedIDs = try sharedBabyOwnerMap(for: currentUserID)
-        return babies.filter { sharedIDs[$0.id] == nil }.count
+        return babies.filter { sharedIDs[$0.id] == nil && isOwned($0, by: currentUserID) }.count
     }
 
     private func sharedBabyOwnerMap(for currentUserID: UUID) throws -> [UUID: UUID] {
@@ -426,6 +432,11 @@ final class BabyRepository {
         if baby.syncState != .pendingUpsert {
             baby.syncState = .pendingUpsert
         }
+    }
+
+    private func isOwned(_ baby: BabyProfile, by currentUserID: UUID) -> Bool {
+        guard let ownerUserID = baby.ownerUserID else { return true }
+        return ownerUserID == currentUserID
     }
 
     private func hasAssociatedData(for babyID: UUID) throws -> Bool {

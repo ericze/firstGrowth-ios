@@ -40,8 +40,8 @@ struct FamilyPermissionTests {
         )
     }
 
-    @Test("schema v4 exposes version 4.0.0")
-    func schemaV4VersionIdentifier() {
-        #expect(SproutSchemaV4.versionIdentifier == Schema.Version(4, 0, 0))
+    @Test("schema v5 exposes version 5.0.0")
+    func schemaV5VersionIdentifier() {
+        #expect(SproutSchemaV5.versionIdentifier == Schema.Version(5, 0, 0))
     }
 }

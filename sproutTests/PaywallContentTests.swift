@@ -25,4 +25,32 @@ final class PaywallContentTests: XCTestCase {
         XCTAssertTrue(PaywallContent.promotedCapabilities.isDisjoint(with: unreleasedCapabilities))
         XCTAssertFalse(PaywallContent.isPurchaseEnabled)
     }
+
+    func test_releaseBlockedCapabilities_includeUnacceptedRemoteAndAIPromises() {
+        let blockedUntilAcceptance: Set<ProCapability> = [
+            .familyGroup,
+            .cloudSync,
+            .aiAssistant,
+        ]
+
+        XCTAssertTrue(PaywallContent.releaseBlockedCapabilities.isSuperset(of: blockedUntilAcceptance))
+        XCTAssertTrue(PaywallContent.promotedCapabilities.isDisjoint(with: PaywallContent.releaseBlockedCapabilities))
+    }
+
+    func test_closedSaleSubtitle_doesNotPromiseImmediateUnlock() {
+        XCTAssertFalse(PaywallContent.isPurchaseEnabled)
+        XCTAssertFalse(PaywallContent.heroSubtitleEN.localizedCaseInsensitiveContains("unlock"))
+        XCTAssertFalse(PaywallContent.heroSubtitleZH.contains("解锁"))
+    }
+
+    func test_aiFeatureCopy_staysInSuggestionScope() throws {
+        let aiFeature = try XCTUnwrap(PaywallContent.allFeatures.first { $0.capability == .aiAssistant })
+
+        XCTAssertFalse(aiFeature.titleEN.localizedCaseInsensitiveContains("assistant"))
+        XCTAssertFalse(aiFeature.titleZH.contains("助手"))
+        XCTAssertFalse(aiFeature.detailEN.localizedCaseInsensitiveContains("analysis"))
+        XCTAssertFalse(aiFeature.detailEN.localizedCaseInsensitiveContains("report"))
+        XCTAssertFalse(aiFeature.detailZH.contains("分析"))
+        XCTAssertFalse(aiFeature.detailZH.contains("周报"))
+    }
 }

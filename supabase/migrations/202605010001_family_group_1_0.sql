@@ -103,11 +103,8 @@ create policy "family groups select own or member"
 on public.family_groups for select
 to authenticated
 using (
-  deleted_at is null
-  and (
-    owner_user_id = auth.uid()
-    or public.family_group_member_is_active(members, auth.uid())
-  )
+  owner_user_id = auth.uid()
+  or public.family_group_member_is_active(members, auth.uid())
 );
 
 drop policy if exists "family groups insert owner" on public.family_groups;
@@ -132,12 +129,75 @@ using (
   )
 )
 with check (
-  deleted_at is null
-  and (
-    owner_user_id = auth.uid()
-    or public.family_group_member_is_active(members, auth.uid())
-  )
+  owner_user_id = auth.uid()
+  or public.family_group_member_is_active(members, auth.uid())
 );
+
+create or replace function public.soft_delete_row(table_name text, row_id uuid, expected_version bigint default null)
+returns void
+language plpgsql
+security invoker
+as $$
+declare
+  current_version bigint;
+  current_user_id uuid;
+  current_owner_user_id uuid;
+  current_members jsonb;
+  current_deleted_at timestamptz;
+  authenticated_user_id uuid := auth.uid();
+begin
+  if table_name not in ('baby_profiles', 'record_items', 'memory_entries', 'family_groups') then
+    raise exception 'unsupported table %', table_name using errcode = '42804';
+  end if;
+
+  if table_name = 'family_groups' then
+    select version, owner_user_id, members, deleted_at
+    into current_version, current_owner_user_id, current_members, current_deleted_at
+    from public.family_groups
+    where id = row_id
+    for update;
+
+    if current_owner_user_id is null or current_deleted_at is not null then
+      return;
+    end if;
+
+    if authenticated_user_id is null or current_owner_user_id <> authenticated_user_id then
+      raise exception 'family group deletion requires the owner' using errcode = '42501';
+    end if;
+
+    if expected_version is not null and current_version <> expected_version then
+      raise exception 'version conflict for family_groups row %', row_id using errcode = '40001';
+    end if;
+
+    update public.family_groups
+    set deleted_at = now(),
+        updated_at = now(),
+        version = version + 1
+    where id = row_id;
+
+    return;
+  end if;
+
+  execute format('select version, user_id from public.%I where id = $1 for update', table_name)
+  into current_version, current_user_id
+  using row_id;
+
+  if current_user_id is null then
+    return;
+  end if;
+
+  if current_user_id <> authenticated_user_id then
+    raise exception 'row does not belong to authenticated user' using errcode = '42501';
+  end if;
+
+  if expected_version is not null and current_version <> expected_version then
+    raise exception 'version conflict for % row %', table_name, row_id using errcode = '40001';
+  end if;
+
+  execute format('update public.%I set deleted_at = now(), updated_at = now(), version = version + 1 where id = $1', table_name)
+  using row_id;
+end;
+$$;
 
 create or replace function public.upsert_family_group(
   payload jsonb,
@@ -221,10 +281,7 @@ begin
           created_at = current_row.created_at,
           updated_at = now(),
           version = version + 1,
-          deleted_at = case
-            when payload ? 'deleted_at' then nullif(payload->>'deleted_at', '')::timestamptz
-            else deleted_at
-          end
+          deleted_at = current_row.deleted_at
       where id = row_id
       returning * into saved_row;
     end if;

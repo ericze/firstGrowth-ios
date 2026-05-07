@@ -190,6 +190,7 @@ struct HomeRouteState {
 struct HomeViewState {
     var todayDisplayItems: [TimelineDisplayItem] = []
     var historyDisplayItems: [TimelineDisplayItem] = []
+    var editableRecordIDs: Set<UUID> = []
     var ongoingSleep: SleepSessionState?
     var recordCellInteractionState: RecordCellInteractionState = .idle
     var recordInteractionFocusState: RecordInteractionFocusState = .timelineIdle

@@ -205,6 +205,45 @@ struct FamilyGroupStoreTests {
         #expect(memberStore.error == nil)
     }
 
+    @Test("member cannot rotate invite manage shared babies or remove members")
+    func memberCannotManageOwnerOnlyFamilyGroupActions() async throws {
+        let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_711_500_000))
+        let ownerID = UUID()
+        let memberID = UUID()
+        let ownerAuthManager = makeAuthenticatedAuthManager(userID: ownerID, email: "owner@example.com")
+        let memberAuthManager = makeAuthenticatedAuthManager(userID: memberID, email: "member@example.com")
+        let subscriptionManager = makeProSubscriptionManager(now: environment.now.value)
+        let baby = BabyProfile(name: "小河", birthDate: environment.now.value.addingTimeInterval(-86_400))
+        environment.modelContext.insert(baby)
+        try environment.modelContext.save()
+
+        let ownerStore = makeFamilyGroupStore(
+            environment: environment,
+            authManager: ownerAuthManager,
+            subscriptionManager: subscriptionManager,
+            nowProvider: { environment.now.value },
+            inviteCodeGenerator: { "SPROUT42" }
+        )
+        #expect(ownerStore.createFamilyGroup() == true)
+
+        let memberStore = makeFamilyGroupStore(
+            environment: environment,
+            authManager: memberAuthManager,
+            subscriptionManager: subscriptionManager,
+            nowProvider: { environment.now.value }
+        )
+        #expect(memberStore.joinFamilyGroup(inviteCode: "SPROUT42") == true)
+
+        #expect(memberStore.rotateInviteCode() == false)
+        #expect(memberStore.error == .notOwner)
+
+        #expect(memberStore.setBabyShared(babyID: baby.id, shared: true) == false)
+        #expect(memberStore.error == .notOwner)
+
+        #expect(memberStore.removeMember(userID: ownerID) == false)
+        #expect(memberStore.error == .notOwner)
+    }
+
     @Test("free user cannot create a family group")
     func freeUserCannotCreateFamilyGroup() async throws {
         let environment = try makeTestEnvironment(now: Date(timeIntervalSince1970: 1_711_500_000))

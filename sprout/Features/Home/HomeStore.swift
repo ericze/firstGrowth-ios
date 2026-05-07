@@ -912,6 +912,7 @@ extension HomeStore {
     private func reloadTimeline() {
         reloadTodayRecords()
         reloadHistoryRecords()
+        refreshTimelineEditability()
     }
 
     private func reloadTodayRecords() {
@@ -1033,6 +1034,7 @@ extension HomeStore {
             viewState.historyDisplayItems.append(contentsOf: newItems)
             loadedHistoryCount = viewState.historyDisplayItems.count
             viewState.hasMoreHistory = records.count == historyPageSize
+            refreshTimelineEditability()
         } catch {
             handlePersistenceError(
                 error,
@@ -1052,7 +1054,7 @@ extension HomeStore {
         guard routeState.activeSheet == nil else { return false }
         guard routeState.recordDeleteState.summary == nil else { return false }
         guard case .timelineIdle = viewState.recordInteractionFocusState else { return false }
-        guard canEditTimelineRecord(recordID) else { return false }
+        guard isTimelineRecordEditable(recordID) else { return false }
         return timelineItems.contains { $0.recordID == recordID }
     }
 
@@ -1111,6 +1113,10 @@ extension HomeStore {
         }
     }
 
+    func isTimelineRecordEditable(_ recordID: UUID) -> Bool {
+        viewState.editableRecordIDs.contains(recordID)
+    }
+
     private func canEditTimelineRecord(_ recordID: UUID) -> Bool {
         guard let recordRepository else { return false }
 
@@ -1124,6 +1130,14 @@ extension HomeStore {
             )
             return false
         }
+    }
+
+    private func refreshTimelineEditability() {
+        viewState.editableRecordIDs = Set(
+            timelineItems.compactMap { item in
+                canEditTimelineRecord(item.recordID) ? item.recordID : nil
+            }
+        )
     }
 
     private func prepareEditDraft(for record: RecordItem, editorType: RecordEditorType) {
@@ -1229,14 +1243,7 @@ extension HomeStore {
 
     private func requestFoodAISuggestion() {
         guard let aiService, let imagePath = foodDraft.selectedImagePath else {
-            viewState.foodAIState = .failed(
-                L10n.text(
-                    "food.ai.failed",
-                    service: localizationService,
-                    en: "Recognition failed, continue manually",
-                    zh: "识别失败，可继续手动记录"
-                )
-            )
+            viewState.foodAIState = .failed(foodAIUnavailableMessage())
             return
         }
 
@@ -1260,17 +1267,12 @@ extension HomeStore {
                     with: self?.foodTagCatalog ?? FoodTagCatalog(language: .english),
                     allowedTags: allowedTags
                 )
-                self?.viewState.foodAIState = .suggestion(canonicalized)
+                self?.viewState.foodAIState = canonicalized.hasUsableDraftSuggestion
+                    ? .suggestion(canonicalized)
+                    : .failed(self?.foodAIUnavailableMessage() ?? "")
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.viewState.foodAIState = .failed(
-                    L10n.text(
-                        "food.ai.failed",
-                        service: self?.localizationService ?? .current,
-                        en: "Recognition failed, continue manually",
-                        zh: "识别失败，可继续手动记录"
-                    )
-                )
+                self?.viewState.foodAIState = .failed(self?.foodAIUnavailableMessage() ?? "")
             }
         }
     }
@@ -1307,6 +1309,15 @@ extension HomeStore {
         viewState.firstTasteFoodTags = []
         viewState.foodAIState = .idle
         aiSuggestTask?.cancel()
+    }
+
+    private func foodAIUnavailableMessage() -> String {
+        L10n.text(
+            "food.ai.failed",
+            service: localizationService,
+            en: "No suggestions right now. Continue manually.",
+            zh: "暂时没有可用建议，可继续手动记录"
+        )
     }
 
     private func resetSleepEditDraft() {

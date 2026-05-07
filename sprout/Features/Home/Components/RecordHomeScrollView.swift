@@ -72,6 +72,7 @@ struct RecordHomeScrollView: View {
             item: item,
             store: store,
             cornerRadius: timelineCardCornerRadius(for: item),
+            isEditable: store.isTimelineRecordEditable(item.recordID),
             isInteractionEnabled: !isTimelineScrollInteracting
         ) {
             timelineCardContent(for: item)

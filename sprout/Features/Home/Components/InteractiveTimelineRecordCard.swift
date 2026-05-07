@@ -4,12 +4,13 @@ struct InteractiveTimelineRecordCard<Content: View>: View {
     let item: TimelineDisplayItem
     let store: HomeStore
     let cornerRadius: CGFloat
+    let isEditable: Bool
     let isInteractionEnabled: Bool
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         Group {
-            if isInteractionEnabled {
+            if isEditable {
                 cardButton
                     .contextMenu {
                         Button {
@@ -51,11 +52,13 @@ struct InteractiveTimelineRecordCard<Content: View>: View {
             }
         }
         .accessibilityHint(
-            L10n.text(
+            isEditable
+            ? L10n.text(
                 "home.timeline.context.hint",
                 en: "Tap to edit. Touch and hold for more actions.",
                 zh: "点按可编辑，长按可查看更多操作。"
             )
+            : ""
         )
     }
 
@@ -69,7 +72,7 @@ struct InteractiveTimelineRecordCard<Content: View>: View {
     }
 
     private func handleTap() {
-        guard isInteractionEnabled else { return }
+        guard isEditable, isInteractionEnabled else { return }
         store.handle(.tapTimelineRecord(item.recordID))
 
         Task { @MainActor in

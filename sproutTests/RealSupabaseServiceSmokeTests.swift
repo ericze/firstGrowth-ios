@@ -32,11 +32,13 @@ struct RealSupabaseServiceSmokeTests {
             let babyID = UUID()
             let recordID = UUID()
             let memoryID = UUID()
+            let familyGroupID = UUID()
             let now = Date()
             let assetPath = "\(userID.uuidString)/smoke/\(stamp).txt"
             let assetData = Data("sprout smoke \(stamp)".utf8)
 
             _ = try await service.fetchServerNow()
+            try await deleteExistingFamilyGroups(service: service)
 
             let profile = BabyProfileDTO(
                 id: babyID,
@@ -56,6 +58,33 @@ struct RealSupabaseServiceSmokeTests {
             #expect(savedProfile.id == babyID)
             #expect(savedProfile.userID == userID)
             #expect(savedProfile.version == 1)
+
+            let familyGroup = FamilyGroupDTO(
+                id: familyGroupID,
+                ownerUserID: userID,
+                inviteCode: "SMOKE-\(stamp.prefix(8).uppercased())",
+                inviteExpiresAt: now.addingTimeInterval(24 * 60 * 60),
+                inviteState: FamilyInviteState.active.rawValue,
+                sharedBabyIDs: [babyID],
+                members: [
+                    FamilyMemberSnapshot(
+                        userID: userID,
+                        role: .owner,
+                        joinedAt: now,
+                        removedAt: nil
+                    )
+                ],
+                createdAt: now,
+                updatedAt: now,
+                version: 1,
+                deletedAt: nil
+            )
+            let savedFamilyGroup = try await service.upsertFamilyGroup(familyGroup, expectedVersion: nil)
+            #expect(savedFamilyGroup.id == familyGroupID)
+            #expect(savedFamilyGroup.ownerUserID == userID)
+            #expect(savedFamilyGroup.sharedBabyIDs == [babyID])
+            #expect(savedFamilyGroup.members == familyGroup.members)
+            #expect(savedFamilyGroup.version == 1)
 
             let record = RecordItemDTO(
                 id: recordID,
@@ -103,15 +132,44 @@ struct RealSupabaseServiceSmokeTests {
             let fetchedProfiles = try await service.fetchBabyProfiles(updatedAfter: nil, upTo: upperBound)
             let fetchedRecords = try await service.fetchRecordItems(updatedAfter: nil, upTo: upperBound)
             let fetchedMemories = try await service.fetchMemoryEntries(updatedAfter: nil, upTo: upperBound)
+            let fetchedFamilyGroups = try await service.fetchFamilyGroups(updatedAfter: nil, upTo: upperBound)
             #expect(fetchedProfiles.contains { $0.id == babyID && $0.name == savedProfile.name })
             #expect(fetchedRecords.contains { $0.id == recordID && $0.note == savedRecord.note })
             #expect(fetchedMemories.contains { $0.id == memoryID && $0.note == savedMemory.note })
+            #expect(fetchedFamilyGroups.contains { $0.id == familyGroupID && $0.inviteCode == savedFamilyGroup.inviteCode })
+
+            let updatedFamilyGroup = FamilyGroupDTO(
+                id: familyGroupID,
+                ownerUserID: userID,
+                inviteCode: savedFamilyGroup.inviteCode,
+                inviteExpiresAt: savedFamilyGroup.inviteExpiresAt,
+                inviteState: FamilyInviteState.revoked.rawValue,
+                sharedBabyIDs: [],
+                members: savedFamilyGroup.members,
+                createdAt: savedFamilyGroup.createdAt,
+                updatedAt: now.addingTimeInterval(60),
+                version: savedFamilyGroup.version,
+                deletedAt: nil
+            )
+            let savedUpdatedFamilyGroup = try await service.upsertFamilyGroup(
+                updatedFamilyGroup,
+                expectedVersion: savedFamilyGroup.version
+            )
+            #expect(savedUpdatedFamilyGroup.id == familyGroupID)
+            #expect(savedUpdatedFamilyGroup.inviteState == FamilyInviteState.revoked.rawValue)
+            #expect(savedUpdatedFamilyGroup.sharedBabyIDs.isEmpty)
+            #expect(savedUpdatedFamilyGroup.version == savedFamilyGroup.version + 1)
 
             try await service.uploadAsset(data: assetData, bucket: .babyAvatars, path: assetPath, contentType: "text/plain")
             let downloadedAsset = try await service.downloadAsset(bucket: .babyAvatars, path: assetPath)
             #expect(downloadedAsset == assetData)
             try await service.deleteAsset(bucket: .babyAvatars, path: assetPath)
 
+            try await service.softDelete(
+                table: .familyGroups,
+                id: familyGroupID,
+                expectedVersion: savedUpdatedFamilyGroup.version
+            )
             try await service.softDelete(table: .recordItems, id: recordID, expectedVersion: savedRecord.version)
             try await service.softDelete(table: .memoryEntries, id: memoryID, expectedVersion: savedMemory.version)
             try await service.softDelete(table: .babyProfiles, id: babyID, expectedVersion: savedProfile.version)
@@ -120,9 +178,11 @@ struct RealSupabaseServiceSmokeTests {
             let deletedProfiles = try await service.fetchBabyProfiles(updatedAfter: upperBound, upTo: deletedUpperBound)
             let deletedRecords = try await service.fetchRecordItems(updatedAfter: upperBound, upTo: deletedUpperBound)
             let deletedMemories = try await service.fetchMemoryEntries(updatedAfter: upperBound, upTo: deletedUpperBound)
+            let deletedFamilyGroups = try await service.fetchFamilyGroups(updatedAfter: upperBound, upTo: deletedUpperBound)
             #expect(deletedProfiles.contains { $0.id == babyID && $0.deletedAt != nil })
             #expect(deletedRecords.contains { $0.id == recordID && $0.deletedAt != nil })
             #expect(deletedMemories.contains { $0.id == memoryID && $0.deletedAt != nil })
+            #expect(deletedFamilyGroups.contains { $0.id == familyGroupID && $0.deletedAt != nil })
 
             try await service.signOut()
         } catch {
@@ -154,6 +214,19 @@ struct RealSupabaseServiceSmokeTests {
                 ]
             )
         )
+    }
+
+    private func deleteExistingFamilyGroups(service: SupabaseService) async throws {
+        let upperBound = try await service.fetchServerNow()
+        let existingGroups = try await service.fetchFamilyGroups(updatedAfter: nil, upTo: upperBound)
+
+        for group in existingGroups where group.deletedAt == nil {
+            try await service.softDelete(
+                table: .familyGroups,
+                id: group.id,
+                expectedVersion: group.version
+            )
+        }
     }
 }
 

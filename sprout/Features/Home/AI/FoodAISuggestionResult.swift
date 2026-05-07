@@ -6,6 +6,10 @@ struct FoodAISuggestionResult: Equatable, Sendable {
     let textureStage: String?
     let noteSuggestion: String?
     let confidenceLevel: FoodAIConfidenceLevel
+
+    var hasUsableDraftSuggestion: Bool {
+        !candidateTags.isEmpty || !(noteSuggestion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
 }
 
 struct FoodTagCandidate: Equatable, Sendable {

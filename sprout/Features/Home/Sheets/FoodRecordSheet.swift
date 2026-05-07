@@ -320,27 +320,33 @@ private struct FoodAIAssistSection: View {
         VStack(alignment: .leading, spacing: 12) {
             switch store.viewState.foodAIState {
             case .idle:
-                Button {
-                    store.handle(.tapFoodAISuggest)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 14, weight: .medium))
-                        Text(L10n.text("food.ai.suggest_button", en: "AI Suggest", zh: "AI 辅助识别"))
-                            .font(AppTheme.Typography.meta)
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        store.handle(.tapFoodAISuggest)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 14, weight: .medium))
+                            Text(L10n.text("food.ai.suggest_button", en: "AI Tag Suggestions", zh: "AI 标签建议"))
+                                .font(AppTheme.Typography.meta)
+                        }
+                        .foregroundStyle(AppTheme.Colors.accent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(AppTheme.Colors.accent.opacity(0.1))
+                        .clipShape(Capsule())
                     }
-                    .foregroundStyle(AppTheme.Colors.accent)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(AppTheme.Colors.accent.opacity(0.1))
-                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
+
+                    Text(L10n.text("food.ai.hint", en: "Optional candidate tags from the photo. Review before applying.", zh: "基于照片生成候选标签，仅供参考，请确认后再应用。"))
+                        .font(AppTheme.Typography.meta)
+                        .foregroundStyle(AppTheme.Colors.secondaryText)
                 }
-                .buttonStyle(.plain)
 
             case .loading:
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text(L10n.text("food.ai.loading", en: "Analyzing...", zh: "识别中..."))
+                    Text(L10n.text("food.ai.loading", en: "Preparing suggestions...", zh: "生成候选建议..."))
                         .font(AppTheme.Typography.meta)
                         .foregroundStyle(AppTheme.Colors.secondaryText)
                 }
@@ -348,7 +354,7 @@ private struct FoodAIAssistSection: View {
 
             case let .suggestion(result):
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(L10n.text("food.ai.apply", en: "Apply Suggestions", zh: "应用建议"))
+                    Text(L10n.text("food.ai.candidates_title", en: "Suggested Tags", zh: "候选标签"))
                         .font(AppTheme.Typography.meta)
                         .foregroundStyle(AppTheme.Colors.secondaryText)
 
@@ -374,6 +380,10 @@ private struct FoodAIAssistSection: View {
                             }
                         }
                     }
+
+                    Text(L10n.text("food.ai.review_hint", en: "These are optional draft suggestions. Check them before saving.", zh: "这些只是候选建议，保存前请按实际情况确认。"))
+                        .font(AppTheme.Typography.meta)
+                        .foregroundStyle(AppTheme.Colors.secondaryText)
 
                     HStack(spacing: 12) {
                         Button {
@@ -405,7 +415,7 @@ private struct FoodAIAssistSection: View {
                     Button {
                         store.handle(.retryFoodAISuggestion)
                     } label: {
-                        Text(L10n.text("food.ai.retry", en: "Retry", zh: "重试"))
+                        Text(L10n.text("food.ai.retry", en: "Try Again", zh: "再试一次"))
                             .font(AppTheme.Typography.meta)
                             .foregroundStyle(AppTheme.Colors.accent)
                     }
